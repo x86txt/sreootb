@@ -23,6 +23,14 @@ jobs:
       with:
         token: ${{ github.token }}
         branch: main
+        fallbackTag: 'v0.0.0'
+        minorList: 'feat,feature'
+        patchList: 'fix,bugfix,perf,refactor,test,tests,docs,style,chore'
+        patchAll: false
+        maxTagsToFetch: 10
+        noNewCommitBehavior: 'warn'
+        noVersionBumpBehavior: 'patch'
+        skipInvalidTags: true
         
     - name: Create tag
       if: steps.semver.outputs.nextStrict != ''
