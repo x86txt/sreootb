@@ -84,12 +84,9 @@ temp/
 *.tmp
 
 # Web build artifacts (Next.js specific)
-web/.next/
-web/out/
-web/dist/
-web/build/
-web/node_modules/
-web/.env*.local
+web/
+.next/
+node_modules/
 
 # Package files
 *.tar.gz
