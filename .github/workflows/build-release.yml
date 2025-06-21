@@ -21,6 +21,10 @@ on:
         default: false
         type: boolean
 
+permissions:
+  contents: write
+  actions: read
+
 env:
   GO_VERSION: '1.23'
 
@@ -329,16 +333,23 @@ jobs:
       id: get_version
       run: |
         if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-          echo "VERSION=${{ github.event.client_payload.version }}" >> $GITHUB_OUTPUT
+          VERSION="${{ github.event.client_payload.version }}"
         elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           if [ "${{ inputs.version }}" != "" ]; then
-            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+            VERSION="${{ inputs.version }}"
           else
-            echo "VERSION=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+            VERSION="dev-$(git rev-parse --short HEAD)"
           fi
         else
-          echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          VERSION="${GITHUB_REF#refs/tags/}"
         fi
+        
+        # Ensure version has 'v' prefix for release
+        if [[ ! "$VERSION" =~ ^v ]]; then
+          VERSION="v$VERSION"
+        fi
+        
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
     - name: Create Release
       uses: softprops/action-gh-release@v1

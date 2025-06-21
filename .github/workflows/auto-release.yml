@@ -21,6 +21,10 @@ on:
         default: false
         type: boolean
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   release:
     name: Create Release
@@ -111,6 +115,11 @@ jobs:
           NEW_TAG="${{ steps.semver.outputs.nextStrict }}"
         else
           NEW_TAG="${{ steps.manual_version.outputs.nextStrict }}"
+        fi
+        
+        # Ensure the tag has 'v' prefix
+        if [[ ! "$NEW_TAG" =~ ^v ]]; then
+          NEW_TAG="v$NEW_TAG"
         fi
         
         git config user.name "github-actions[bot]"
