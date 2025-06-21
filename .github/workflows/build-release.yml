@@ -1,0 +1,372 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  repository_dispatch:
+    types: [new-release]
+
+env:
+  GO_VERSION: '1.23'
+
+jobs:
+  # Native builds for Linux x86_64
+  build-linux-native:
+    name: Build Linux Native
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Set version variables
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/}
+        elif [[ ${{ github.event_name }} == "repository_dispatch" ]]; then
+          VERSION=${{ github.event.client_payload.version }}
+        else
+          VERSION="dev-$(git rev-parse --short HEAD)"
+        fi
+        COMMIT=$(git rev-parse HEAD)
+        DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+        echo "COMMIT=${COMMIT}" >> $GITHUB_OUTPUT
+        echo "DATE=${DATE}" >> $GITHUB_OUTPUT
+
+    - name: Build Linux x86_64
+      run: |
+        mkdir -p dist
+        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+          -ldflags="-s -w -X github.com/x86txt/sreootb/cmd.Version=${{ steps.version.outputs.VERSION }} -X github.com/x86txt/sreootb/cmd.Commit=${{ steps.version.outputs.COMMIT }} -X github.com/x86txt/sreootb/cmd.Date=${{ steps.version.outputs.DATE }}" \
+          -o dist/sreootb-linux-x86_64 .
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sreootb-linux-x86_64
+        path: dist/sreootb-linux-x86_64
+        retention-days: 30
+
+  # Cross-compilation builds using Docker
+  build-cross:
+    name: Build Cross-Platform
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: linux-arm64
+            dockerfile: |
+              FROM --platform=linux/amd64 golang:1.23-bullseye
+              RUN apt-get update && apt-get install -y gcc-aarch64-linux-gnu
+              ENV CC=aarch64-linux-gnu-gcc
+              ENV CGO_ENABLED=1
+              ENV GOOS=linux
+              ENV GOARCH=arm64
+          - name: linux-armv7
+            dockerfile: |
+              FROM --platform=linux/amd64 golang:1.23-bullseye
+              RUN apt-get update && apt-get install -y gcc-arm-linux-gnueabihf
+              ENV CC=arm-linux-gnueabihf-gcc
+              ENV CGO_ENABLED=1
+              ENV GOOS=linux
+              ENV GOARCH=arm
+              ENV GOARM=7
+          - name: linux-riscv64
+            dockerfile: |
+              FROM --platform=linux/amd64 golang:1.23-bullseye
+              RUN apt-get update && apt-get install -y gcc-riscv64-linux-gnu
+              ENV CC=riscv64-linux-gnu-gcc
+              ENV CGO_ENABLED=1
+              ENV GOOS=linux
+              ENV GOARCH=riscv64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Set version variables
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/}
+        elif [[ ${{ github.event_name }} == "repository_dispatch" ]]; then
+          VERSION=${{ github.event.client_payload.version }}
+        else
+          VERSION="dev-$(git rev-parse --short HEAD)"
+        fi
+        COMMIT=$(git rev-parse HEAD)
+        DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+        echo "COMMIT=${COMMIT}" >> $GITHUB_OUTPUT
+        echo "DATE=${DATE}" >> $GITHUB_OUTPUT
+
+    - name: Create Dockerfile
+      run: |
+        cat > Dockerfile << 'EOF'
+        ${{ matrix.dockerfile }}
+        WORKDIR /app
+        COPY go.mod go.sum ./
+        RUN go mod download
+        COPY . .
+        ARG VERSION
+        ARG COMMIT
+        ARG DATE
+        RUN go build \
+          -ldflags="-s -w -X github.com/x86txt/sreootb/cmd.Version=${VERSION} -X github.com/x86txt/sreootb/cmd.Commit=${COMMIT} -X github.com/x86txt/sreootb/cmd.Date=${DATE}" \
+          -o sreootb-${{ matrix.name }} .
+        EOF
+
+    - name: Build with Docker
+      run: |
+        docker build \
+          --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
+          --build-arg COMMIT=${{ steps.version.outputs.COMMIT }} \
+          --build-arg DATE=${{ steps.version.outputs.DATE }} \
+          -t build-${{ matrix.name }} .
+        docker create --name temp-${{ matrix.name }} build-${{ matrix.name }}
+        docker cp temp-${{ matrix.name }}:/app/sreootb-${{ matrix.name }} ./
+        docker rm temp-${{ matrix.name }}
+        mkdir -p dist
+        mv sreootb-${{ matrix.name }} dist/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sreootb-${{ matrix.name }}
+        path: dist/sreootb-${{ matrix.name }}
+        retention-days: 30
+
+  # Windows build
+  build-windows:
+    name: Build Windows x86_64
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Install MinGW
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-mingw-w64-x86-64
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Set version variables
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/}
+        elif [[ ${{ github.event_name }} == "repository_dispatch" ]]; then
+          VERSION=${{ github.event.client_payload.version }}
+        else
+          VERSION="dev-$(git rev-parse --short HEAD)"
+        fi
+        COMMIT=$(git rev-parse HEAD)
+        DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+        echo "COMMIT=${COMMIT}" >> $GITHUB_OUTPUT
+        echo "DATE=${DATE}" >> $GITHUB_OUTPUT
+
+    - name: Build Windows x86_64
+      env:
+        CGO_ENABLED: 1
+        GOOS: windows
+        GOARCH: amd64
+        CC: x86_64-w64-mingw32-gcc
+      run: |
+        mkdir -p dist
+        go build \
+          -ldflags="-s -w -X github.com/x86txt/sreootb/cmd.Version=${{ steps.version.outputs.VERSION }} -X github.com/x86txt/sreootb/cmd.Commit=${{ steps.version.outputs.COMMIT }} -X github.com/x86txt/sreootb/cmd.Date=${{ steps.version.outputs.DATE }}" \
+          -o dist/sreootb-windows-x86_64.exe .
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sreootb-windows-x86_64
+        path: dist/sreootb-windows-x86_64.exe
+        retention-days: 30
+
+  # macOS ARM build
+  build-macos:
+    name: Build macOS ARM64
+    runs-on: macos-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/Library/Caches/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Set version variables
+      id: version
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/}
+        elif [[ ${{ github.event_name }} == "repository_dispatch" ]]; then
+          VERSION=${{ github.event.client_payload.version }}
+        else
+          VERSION="dev-$(git rev-parse --short HEAD)"
+        fi
+        COMMIT=$(git rev-parse HEAD)
+        DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+        echo "COMMIT=${COMMIT}" >> $GITHUB_OUTPUT
+        echo "DATE=${DATE}" >> $GITHUB_OUTPUT
+
+    - name: Build macOS ARM64
+      env:
+        CGO_ENABLED: 1
+        GOOS: darwin
+        GOARCH: arm64
+      run: |
+        mkdir -p dist
+        go build \
+          -ldflags="-s -w -X github.com/x86txt/sreootb/cmd.Version=${{ steps.version.outputs.VERSION }} -X github.com/x86txt/sreootb/cmd.Commit=${{ steps.version.outputs.COMMIT }} -X github.com/x86txt/sreootb/cmd.Date=${{ steps.version.outputs.DATE }}" \
+          -o dist/sreootb-macos-arm64 .
+
+    - name: Upload artifact  
+      uses: actions/upload-artifact@v4
+      with:
+        name: sreootb-macos-arm64
+        path: dist/sreootb-macos-arm64
+        retention-days: 30
+
+  release:
+    name: Create Release
+    needs: [build-linux-native, build-cross, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'repository_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: dist
+
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        find dist -type f -name "sreootb-*" -exec cp {} release-assets/ \;
+        ls -la release-assets/
+
+    - name: Create checksums
+      run: |
+        cd release-assets
+        sha256sum * > checksums.txt
+        cat checksums.txt
+
+    - name: Extract version from tag
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+          echo "VERSION=${{ github.event.client_payload.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.get_version.outputs.VERSION }}
+        name: Release ${{ steps.get_version.outputs.VERSION }}
+        draft: false
+        prerelease: false
+        files: |
+          release-assets/*
+        body: |
+          ## Release ${{ steps.get_version.outputs.VERSION }}
+          
+          ### Binaries
+          This release includes binaries for the following platforms:
+          
+          - **Linux x86_64**: `sreootb-linux-x86_64`
+          - **Linux ARM64** (Graviton 3+ compatible): `sreootb-linux-arm64`
+          - **Linux ARMv7**: `sreootb-linux-armv7`
+          - **Linux RISC-V 64**: `sreootb-linux-riscv64`
+          - **Windows x86_64**: `sreootb-windows-x86_64.exe`
+          - **macOS ARM64**: `sreootb-macos-arm64`
+          
+          ### Installation
+          1. Download the appropriate binary for your platform
+          2. Make it executable (Unix systems): `chmod +x sreootb-*`
+          3. Run with `./sreootb-* --help` to see available commands
+          4. Check version with `./sreootb-* --version`
+          
+          ### Verification
+          You can verify the integrity of the downloaded files using the included `checksums.txt` file:
+          ```bash
+          shasum -a 256 -c checksums.txt
+          ```
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-info:
+    name: Build Information
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-linux-native, build-cross, build-windows, build-macos]
+    
+    steps:
+    - name: Build Summary
+      run: |
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "Built binaries for the following platforms:" >> $GITHUB_STEP_SUMMARY
+        echo "- Linux x86_64 (Intel/AMD 64-bit)" >> $GITHUB_STEP_SUMMARY
+        echo "- Linux ARM64 (AWS Graviton 3+, Apple Silicon servers)" >> $GITHUB_STEP_SUMMARY
+        echo "- Linux ARMv7 (Raspberry Pi, embedded devices)" >> $GITHUB_STEP_SUMMARY
+        echo "- Linux RISC-V 64-bit (RISC-V processors)" >> $GITHUB_STEP_SUMMARY
+        echo "- Windows x86_64 (Windows 64-bit)" >> $GITHUB_STEP_SUMMARY
+        echo "- macOS ARM64 (Apple Silicon Macs)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Artifacts are available for download for 30 days." >> $GITHUB_STEP_SUMMARY
+        echo "All binaries include version information accessible via --version flag." >> $GITHUB_STEP_SUMMARY 

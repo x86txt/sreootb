@@ -1,0 +1,41 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message, 'skip-release') }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Get next version
+      id: semver
+      uses: ietf-tools/semver-action@v1
+      with:
+        token: ${{ github.token }}
+        branch: main
+        
+    - name: Create tag
+      if: steps.semver.outputs.nextStrict != ''
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git tag ${{ steps.semver.outputs.nextStrict }}
+        git push origin ${{ steps.semver.outputs.nextStrict }}
+
+    - name: Trigger build workflow
+      if: steps.semver.outputs.nextStrict != ''
+      uses: peter-evans/repository-dispatch@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        event-type: new-release
+        client-payload: '{"version": "${{ steps.semver.outputs.nextStrict }}"}' 
