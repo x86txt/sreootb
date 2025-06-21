@@ -8,6 +8,18 @@ on:
     branches: [ main ]
   repository_dispatch:
     types: [new-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v1.0.0 or leave empty for dev build)'
+        required: false
+        default: ''
+        type: string
+      create_release:
+        description: 'Create GitHub release'
+        required: false
+        default: false
+        type: boolean
 
 env:
   GO_VERSION: '1.23'
@@ -39,7 +51,9 @@ jobs:
     - name: Set version variables
       id: version
       run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.version }}" != "" ]]; then
+          VERSION="${{ inputs.version }}"
+        elif [[ $GITHUB_REF == refs/tags/* ]]; then
           VERSION=${GITHUB_REF#refs/tags/}
         elif [[ ${{ github.event_name }} == "repository_dispatch" ]]; then
           VERSION=${{ github.event.client_payload.version }}
@@ -109,7 +123,9 @@ jobs:
     - name: Set version variables
       id: version
       run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.version }}" != "" ]]; then
+          VERSION="${{ inputs.version }}"
+        elif [[ $GITHUB_REF == refs/tags/* ]]; then
           VERSION=${GITHUB_REF#refs/tags/}
         elif [[ ${{ github.event_name }} == "repository_dispatch" ]]; then
           VERSION=${{ github.event.client_payload.version }}
@@ -189,7 +205,9 @@ jobs:
     - name: Set version variables
       id: version
       run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.version }}" != "" ]]; then
+          VERSION="${{ inputs.version }}"
+        elif [[ $GITHUB_REF == refs/tags/* ]]; then
           VERSION=${GITHUB_REF#refs/tags/}
         elif [[ ${{ github.event_name }} == "repository_dispatch" ]]; then
           VERSION=${{ github.event.client_payload.version }}
@@ -247,7 +265,9 @@ jobs:
     - name: Set version variables
       id: version
       run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.version }}" != "" ]]; then
+          VERSION="${{ inputs.version }}"
+        elif [[ $GITHUB_REF == refs/tags/* ]]; then
           VERSION=${GITHUB_REF#refs/tags/}
         elif [[ ${{ github.event_name }} == "repository_dispatch" ]]; then
           VERSION=${{ github.event.client_payload.version }}
@@ -282,7 +302,7 @@ jobs:
     name: Create Release
     needs: [build-linux-native, build-cross, build-windows, build-macos]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'repository_dispatch'
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.create_release)
     
     steps:
     - name: Checkout code
@@ -310,6 +330,12 @@ jobs:
       run: |
         if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
           echo "VERSION=${{ github.event.client_payload.version }}" >> $GITHUB_OUTPUT
+        elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ inputs.version }}" != "" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=dev-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          fi
         else
           echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
         fi

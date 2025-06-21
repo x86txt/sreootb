@@ -3,12 +3,29 @@ name: Auto Release
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+      skip_semver:
+        description: 'Skip semantic version analysis (manual version bump)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.event.head_commit.message, 'skip-release') }}
+    if: ${{ !contains(github.event.head_commit.message, 'skip-release') || github.event_name == 'workflow_dispatch' }}
     
     steps:
     - name: Checkout code
@@ -17,13 +34,33 @@ jobs:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Get next version
+    - name: Check for existing tags
+      id: check_tags
+      run: |
+        if git tag -l | grep -q .; then
+          echo "has_tags=true" >> $GITHUB_OUTPUT
+          echo "Found existing tags"
+        else
+          echo "has_tags=false" >> $GITHUB_OUTPUT
+          echo "No tags found - will create initial tag"
+        fi
+
+    - name: Create initial tag if none exist
+      if: steps.check_tags.outputs.has_tags == 'false'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git tag v0.1.0
+        git push origin v0.1.0
+        echo "Created initial tag v0.1.0"
+
+    - name: Get next version (semantic)
+      if: ${{ !inputs.skip_semver && steps.check_tags.outputs.has_tags == 'true' }}
       id: semver
       uses: ietf-tools/semver-action@v1
       with:
         token: ${{ github.token }}
         branch: main
-        fallbackTag: 'v0.0.0'
         minorList: 'feat,feature'
         patchList: 'fix,bugfix,perf,refactor,test,tests,docs,style,chore'
         patchAll: false
@@ -31,19 +68,65 @@ jobs:
         noNewCommitBehavior: 'warn'
         noVersionBumpBehavior: 'patch'
         skipInvalidTags: true
+
+    - name: Get next version (manual)
+      if: ${{ inputs.skip_semver || github.event_name == 'workflow_dispatch' && inputs.release_type != 'auto' }}
+      id: manual_version
+      run: |
+        LATEST_TAG=$(git describe --tags --abbrev=0)
+        echo "Latest tag: $LATEST_TAG"
+        
+        # Parse current version
+        VERSION_REGEX="^v([0-9]+)\.([0-9]+)\.([0-9]+)(-.*)?$"
+        if [[ $LATEST_TAG =~ $VERSION_REGEX ]]; then
+          MAJOR=${BASH_REMATCH[1]}
+          MINOR=${BASH_REMATCH[2]}
+          PATCH=${BASH_REMATCH[3]}
+          
+          case "${{ inputs.release_type }}" in
+            patch)
+              NEW_VERSION="v$MAJOR.$MINOR.$((PATCH + 1))"
+              ;;
+            minor)
+              NEW_VERSION="v$MAJOR.$((MINOR + 1)).0"
+              ;;
+            major)
+              NEW_VERSION="v$((MAJOR + 1)).0.0"
+              ;;
+            *)
+              NEW_VERSION="v$MAJOR.$MINOR.$((PATCH + 1))"
+              ;;
+          esac
+          
+          echo "nextStrict=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Manual version bump: $LATEST_TAG -> $NEW_VERSION"
+        else
+          echo "nextStrict=v0.1.1" >> $GITHUB_OUTPUT
+        fi
         
     - name: Create tag
-      if: steps.semver.outputs.nextStrict != ''
+      if: steps.check_tags.outputs.has_tags == 'true' && (steps.semver.outputs.nextStrict != '' || steps.manual_version.outputs.nextStrict != '')
       run: |
+        if [ "${{ steps.semver.outputs.nextStrict }}" != "" ]; then
+          NEW_TAG="${{ steps.semver.outputs.nextStrict }}"
+        else
+          NEW_TAG="${{ steps.manual_version.outputs.nextStrict }}"
+        fi
+        
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git tag ${{ steps.semver.outputs.nextStrict }}
-        git push origin ${{ steps.semver.outputs.nextStrict }}
+        git tag "$NEW_TAG"
+        git push origin "$NEW_TAG"
+        echo "Created tag: $NEW_TAG"
 
     - name: Trigger build workflow
-      if: steps.semver.outputs.nextStrict != ''
+      if: steps.check_tags.outputs.has_tags == 'true' && (steps.semver.outputs.nextStrict != '' || steps.manual_version.outputs.nextStrict != '')
       uses: peter-evans/repository-dispatch@v3
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         event-type: new-release
-        client-payload: '{"version": "${{ steps.semver.outputs.nextStrict }}"}' 
+        client-payload: |
+          {
+            "version": "${{ steps.semver.outputs.nextStrict || steps.manual_version.outputs.nextStrict }}",
+            "triggered_by": "${{ github.event_name }}"
+          } 
