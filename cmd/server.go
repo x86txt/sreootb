@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/signal"
@@ -102,8 +104,23 @@ func runServer(cmd *cobra.Command, args []string) error {
 	return srv.Start(ctx)
 }
 
+// generateSecureAPIKey generates a cryptographically secure API key
+func generateSecureAPIKey() (string, error) {
+	bytes := make([]byte, 32) // 32 bytes = 64 hex characters
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
 func generateServerConfig() error {
-	configContent := `# SRE: Out of the Box (SREootb) Server Configuration
+	// Generate a secure admin API key
+	adminAPIKey, err := generateSecureAPIKey()
+	if err != nil {
+		return fmt.Errorf("failed to generate admin API key: %w", err)
+	}
+
+	configContent := fmt.Sprintf(`# SRE: Out of the Box (SREootb) Server Configuration
 
 # Logging configuration
 log:
@@ -127,6 +144,9 @@ server:
                                     # Certificates will be stored in ./certs/ directory
                                     # Includes proper DNS Alt Names for browser compatibility
   
+  # Authentication
+  admin_api_key: "%s"               # Admin API key for web GUI access (generated)
+  
   # General server settings
   db_path: "./sreootb.db"            # SQLite database path
   min_scan_interval: "10s"          # Minimum allowed scan interval
@@ -135,7 +155,7 @@ server:
 
 # Agent configuration is not needed for server mode
 # Use 'sreootb agent --gen-config' to generate agent configuration
-`
+`, adminAPIKey)
 
 	filename := "sreootb-server.yaml"
 	if err := os.WriteFile(filename, []byte(configContent), 0644); err != nil {
@@ -143,6 +163,7 @@ server:
 	}
 
 	fmt.Printf("✅ Server configuration file generated: %s\n", filename)
+	fmt.Printf("🔑 Admin API Key (for web GUI access): %s\n", adminAPIKey)
 	fmt.Println("📝 Edit the configuration file and then start the server with:")
 	fmt.Printf("   sreootb server --config %s\n", filename)
 	return nil

@@ -248,9 +248,18 @@ func (a *Agent) handleWebSocketConnection(ctx context.Context) error {
 		log.Error().Err(err).Msg("Failed to send initial status update")
 	}
 
+	// Request initial tasks after connection is established
+	if err := a.requestTasksViaWebSocket(); err != nil {
+		log.Error().Err(err).Msg("Failed to request initial tasks via WebSocket")
+	}
+
 	// Start heartbeat sender
 	heartbeatTicker := time.NewTicker(a.config.Agent.CheckInterval)
 	defer heartbeatTicker.Stop()
+
+	// Start task status summary ticker (every 60 seconds)
+	taskStatusTicker := time.NewTicker(60 * time.Second)
+	defer taskStatusTicker.Stop()
 
 	// Handle WebSocket messages
 	go a.handleWebSocketMessages()
@@ -276,6 +285,18 @@ func (a *Agent) handleWebSocketConnection(ctx context.Context) error {
 					a.useWebSocket = false
 					return a.handleHTTPPolling(ctx)
 				}
+			}
+		case <-taskStatusTicker.C:
+			// Display current task status every 60 seconds
+			a.tasksMutex.RLock()
+			currentTasks := make([]models.MonitorTask, len(a.tasks))
+			copy(currentTasks, a.tasks)
+			a.tasksMutex.RUnlock()
+
+			if len(currentTasks) > 0 {
+				a.logTaskSummary(currentTasks, false)
+			} else {
+				log.Info().Msg("🔄 Task status update - No monitoring tasks assigned")
 			}
 		}
 	}
@@ -479,42 +500,36 @@ func (a *Agent) startHealthServer() {
 
 // startMonitoringEngine manages monitoring tasks lifecycle
 func (a *Agent) startMonitoringEngine() {
-	// Request initial tasks via WebSocket (if connected) or HTTP fallback
+	// For WebSocket mode, tasks are requested after connection is established
+	// and updates come via WebSocket messages
 	if a.useWebSocket {
-		// Send task request via WebSocket
-		if err := a.requestTasksViaWebSocket(); err != nil {
-			log.Error().Err(err).Msg("Failed to request initial tasks via WebSocket")
-		}
-	} else {
-		// Fallback to HTTP polling for non-WebSocket connections
-		taskRefreshTicker := time.NewTicker(5 * time.Minute)
-		defer taskRefreshTicker.Stop()
-
-		// Initial task fetch
-		if err := a.fetchAndUpdateTasks(); err != nil {
-			log.Error().Err(err).Msg("Failed to fetch initial monitoring tasks")
-		}
-
-		for {
-			select {
-			case <-a.stopChan:
-				log.Info().Msg("Stopping monitoring engine")
-				a.stopAllTaskSchedulers()
-				return
-			case <-taskRefreshTicker.C:
-				if err := a.fetchAndUpdateTasks(); err != nil {
-					log.Error().Err(err).Msg("Failed to refresh monitoring tasks")
-				}
-			}
-		}
-	}
-
-	// For WebSocket mode, task updates come via WebSocket messages
-	// Just wait for stop signal
-	if a.useWebSocket {
+		// Just wait for stop signal - task management is handled via WebSocket
 		<-a.stopChan
 		log.Info().Msg("Stopping monitoring engine")
 		a.stopAllTaskSchedulers()
+		return
+	}
+
+	// HTTP fallback mode - use periodic polling
+	taskRefreshTicker := time.NewTicker(5 * time.Minute)
+	defer taskRefreshTicker.Stop()
+
+	// Initial task fetch for HTTP mode
+	if err := a.fetchAndUpdateTasks(); err != nil {
+		log.Error().Err(err).Msg("Failed to fetch initial monitoring tasks")
+	}
+
+	for {
+		select {
+		case <-a.stopChan:
+			log.Info().Msg("Stopping monitoring engine")
+			a.stopAllTaskSchedulers()
+			return
+		case <-taskRefreshTicker.C:
+			if err := a.fetchAndUpdateTasks(); err != nil {
+				log.Error().Err(err).Msg("Failed to refresh monitoring tasks")
+			}
+		}
 	}
 }
 
@@ -1011,6 +1026,8 @@ func (a *Agent) logTaskSummary(tasks []models.MonitorTask, isInitial bool) {
 	if len(tasks) == 0 {
 		if isInitial {
 			log.Info().Msg("✅ Agent connected - No monitoring tasks assigned")
+		} else {
+			log.Info().Msg("🔄 Task status update - No monitoring tasks assigned")
 		}
 		return
 	}
@@ -1026,7 +1043,7 @@ func (a *Agent) logTaskSummary(tasks []models.MonitorTask, isInitial bool) {
 	if isInitial {
 		logEvent = logEvent.Str("status", "✅ Agent connected - Received monitoring tasks")
 	} else {
-		logEvent = logEvent.Str("status", "📋 Task summary")
+		logEvent = logEvent.Str("status", "🔄 Task status update - Active monitoring tasks")
 	}
 
 	logEvent = logEvent.Int("total_tasks", len(tasks))

@@ -117,6 +117,11 @@ func New(cfg *config.Config, staticFS, appFS embed.FS) (*Server, error) {
 		Str("agent_api_key", cfg.Server.AgentAPIKey).
 		Msg("Agent API Key - use this key when registering agents")
 
+	// Display admin API key for web GUI access
+	log.Info().
+		Str("admin_api_key", cfg.Server.AdminAPIKey).
+		Msg("Admin API Key - use this key to access the web GUI")
+
 	// Initialize database
 	db, err := database.New(cfg.Server.DBPath)
 	if err != nil {
@@ -821,8 +826,15 @@ func (s *Server) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 	// Add connection status and server key identification
 	serverKeyHash := utils.HashAPIKey(s.config.Server.AgentAPIKey)
 	s.connMutex.RLock()
+
+	// Create a map from KeyHash to connection for efficient lookup
+	connByKeyHash := make(map[string]*AgentConn)
+	for _, conn := range s.agentConns {
+		connByKeyHash[conn.KeyHash] = conn
+	}
+
 	for i := range agents {
-		if conn, exists := s.agentConns[strconv.Itoa(agents[i].ID)]; exists {
+		if conn, exists := connByKeyHash[agents[i].APIKeyHash]; exists {
 			agents[i].Connected = true
 			agents[i].LastSeen = &conn.LastSeen
 		}
