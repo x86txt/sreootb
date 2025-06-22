@@ -45,9 +45,23 @@ func init() {
 	serverCmd.Flags().String("bind", "0.0.0.0:8080", "address to bind the server to")
 	serverCmd.Flags().String("tls-cert", "", "path to TLS certificate file")
 	serverCmd.Flags().String("tls-key", "", "path to TLS private key file")
-	serverCmd.Flags().String("db-path", "./sreootb.db", "path to SQLite database file")
 	serverCmd.Flags().Bool("auto-tls", false, "enable automatic TLS certificate generation")
 	serverCmd.Flags().Bool("http3", false, "enable HTTP/3 support (requires TLS)")
+
+	// Database configuration flags
+	serverCmd.Flags().String("db-type", "sqlite", "database type: sqlite or cockroachdb")
+	serverCmd.Flags().String("db-sqlite-path", "./db/sreootb.db", "path to SQLite database file (when using sqlite)")
+	serverCmd.Flags().String("db-host", "", "database host (when using cockroachdb)")
+	serverCmd.Flags().Int("db-port", 26257, "database port (when using cockroachdb)")
+	serverCmd.Flags().String("db-database", "", "database name (when using cockroachdb)")
+	serverCmd.Flags().String("db-user", "", "database user (when using cockroachdb)")
+	serverCmd.Flags().String("db-password", "", "database password (when using cockroachdb)")
+	serverCmd.Flags().String("db-ssl-mode", "require", "SSL mode for CockroachDB connection")
+	serverCmd.Flags().String("db-ssl-root-cert", "", "path to SSL root certificate")
+	serverCmd.Flags().String("db-ssl-cert", "", "path to SSL client certificate")
+	serverCmd.Flags().String("db-ssl-key", "", "path to SSL client key")
+	serverCmd.Flags().Int("db-max-open-conns", 25, "maximum number of open database connections")
+	serverCmd.Flags().Int("db-max-idle-conns", 5, "maximum number of idle database connections")
 
 	// Config generation flags
 	serverCmd.Flags().Bool("gen-config", false, "generate sample server configuration file")
@@ -57,9 +71,23 @@ func init() {
 	viper.BindPFlag("server.bind", serverCmd.Flags().Lookup("bind"))
 	viper.BindPFlag("server.tls_cert", serverCmd.Flags().Lookup("tls-cert"))
 	viper.BindPFlag("server.tls_key", serverCmd.Flags().Lookup("tls-key"))
-	viper.BindPFlag("server.db_path", serverCmd.Flags().Lookup("db-path"))
 	viper.BindPFlag("server.auto_tls", serverCmd.Flags().Lookup("auto-tls"))
 	viper.BindPFlag("server.http3", serverCmd.Flags().Lookup("http3"))
+
+	// Bind database flags to viper
+	viper.BindPFlag("server.database.type", serverCmd.Flags().Lookup("db-type"))
+	viper.BindPFlag("server.database.sqlite_path", serverCmd.Flags().Lookup("db-sqlite-path"))
+	viper.BindPFlag("server.database.host", serverCmd.Flags().Lookup("db-host"))
+	viper.BindPFlag("server.database.port", serverCmd.Flags().Lookup("db-port"))
+	viper.BindPFlag("server.database.database", serverCmd.Flags().Lookup("db-database"))
+	viper.BindPFlag("server.database.user", serverCmd.Flags().Lookup("db-user"))
+	viper.BindPFlag("server.database.password", serverCmd.Flags().Lookup("db-password"))
+	viper.BindPFlag("server.database.ssl_mode", serverCmd.Flags().Lookup("db-ssl-mode"))
+	viper.BindPFlag("server.database.ssl_root_cert", serverCmd.Flags().Lookup("db-ssl-root-cert"))
+	viper.BindPFlag("server.database.ssl_cert", serverCmd.Flags().Lookup("db-ssl-cert"))
+	viper.BindPFlag("server.database.ssl_key", serverCmd.Flags().Lookup("db-ssl-key"))
+	viper.BindPFlag("server.database.max_open_conns", serverCmd.Flags().Lookup("db-max-open-conns"))
+	viper.BindPFlag("server.database.max_idle_conns", serverCmd.Flags().Lookup("db-max-idle-conns"))
 }
 
 func runServer(cmd *cobra.Command, args []string) error {
@@ -144,17 +172,51 @@ server:
                                     # Certificates will be stored in ./certs/ directory
                                     # Includes proper DNS Alt Names for browser compatibility
   
+  # Database Configuration
+  database:
+    # Database type: "sqlite" or "cockroachdb"
+    type: "sqlite"
+    
+    # SQLite configuration (used when type = "sqlite")
+    sqlite_path: "./db/sreootb.db"   # SQLite database file path
+    
+    # CockroachDB configuration (used when type = "cockroachdb")
+    # Uncomment and configure for CockroachDB cluster deployment
+    # host: "localhost"              # CockroachDB cluster host
+    # port: 26257                    # CockroachDB port (default: 26257)
+    # database: "sreootb"            # Database name
+    # user: "sreootb_user"           # Database user
+    # password: "secure_password"    # Database password
+    # ssl_mode: "require"            # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+    # ssl_root_cert: ""              # Path to SSL root certificate file
+    # ssl_cert: ""                   # Path to SSL client certificate file  
+    # ssl_key: ""                    # Path to SSL client key file
+    
+    # Connection pool settings (for CockroachDB)
+    max_open_conns: 25               # Maximum open connections
+    max_idle_conns: 5                # Maximum idle connections
+    conn_max_lifetime: "300s"        # Connection maximum lifetime
+    conn_max_idle_time: "60s"        # Connection maximum idle time
+  
   # Authentication
   admin_api_key: "%s"               # Admin API key for web GUI access (generated)
   
   # General server settings
-  db_path: "./sreootb.db"            # SQLite database path
   min_scan_interval: "10s"          # Minimum allowed scan interval
   max_scan_interval: "24h"          # Maximum allowed scan interval
   dev_mode: false                   # Development mode
 
 # Agent configuration is not needed for server mode
 # Use 'sreootb agent --gen-config' to generate agent configuration
+
+# Example CockroachDB HA deployment configuration:
+# 1. Set up a 3-node CockroachDB cluster
+# 2. Create the database and user:
+#    CREATE DATABASE sreootb;
+#    CREATE USER sreootb_user WITH PASSWORD 'secure_password';
+#    GRANT ALL ON DATABASE sreootb TO sreootb_user;
+# 3. Deploy this application to 3 servers with identical configuration
+# 4. Each server can connect to the local CockroachDB node for optimal performance
 `, adminAPIKey)
 
 	filename := "sreootb-server.yaml"
@@ -164,8 +226,16 @@ server:
 
 	fmt.Printf("✅ Server configuration file generated: %s\n", filename)
 	fmt.Printf("🔑 Admin API Key (for web GUI access): %s\n", adminAPIKey)
-	fmt.Println("📝 Edit the configuration file and then start the server with:")
+	fmt.Println("📝 Edit the configuration file to:")
+	fmt.Println("   - Choose database type (sqlite or cockroachdb)")
+	fmt.Println("   - Configure database connection parameters")
+	fmt.Println("   - Set up TLS certificates if needed")
 	fmt.Printf("   sreootb server --config %s\n", filename)
+	fmt.Println("\n🏗️  For CockroachDB HA deployment:")
+	fmt.Println("   1. Set up a 3-node CockroachDB cluster")
+	fmt.Println("   2. Create database and user as shown in config comments")
+	fmt.Println("   3. Deploy app to 3 servers with database.type: cockroachdb")
+	fmt.Println("   4. Point each server to local CockroachDB node for best performance")
 	return nil
 }
 

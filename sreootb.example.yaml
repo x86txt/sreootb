@@ -22,11 +22,34 @@ server:
                                     # Certificates will be stored in ./certs/ directory
                                     # Includes proper DNS Alt Names for browser compatibility
   
+  # Database Configuration
+  database:
+    # Database type: "sqlite" or "cockroachdb"
+    type: "sqlite"
+    
+    # SQLite configuration (used when type = "sqlite")
+    sqlite_path: "./db/sreootb.db"   # SQLite database file path
+    
+    # CockroachDB configuration (used when type = "cockroachdb")
+    # Uncomment and configure for CockroachDB cluster deployment
+    # host: "localhost"              # CockroachDB cluster host
+    # port: 26257                    # CockroachDB port (default: 26257)
+    # database: "sreootb"            # Database name
+    # user: "sreootb_user"           # Database user
+    # password: "secure_password"    # Database password
+    # ssl_mode: "require"            # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+    # ssl_root_cert: ""              # Path to SSL root certificate file
+    # ssl_cert: ""                   # Path to SSL client certificate file  
+    # ssl_key: ""                    # Path to SSL client key file
+    
+    # Connection pool settings (for CockroachDB)
+    max_open_conns: 25               # Maximum open connections
+    max_idle_conns: 5                # Maximum idle connections
+    conn_max_lifetime: "300s"        # Connection maximum lifetime
+    conn_max_idle_time: "60s"        # Connection maximum idle time
+  
   # Authentication
   admin_api_key: "change-me-in-production"    # Admin API key for web GUI access
-  
-  # Database and storage
-  db_path: "./db/sreootb.db"         # SQLite database path (organized in db/ subdirectory)
   
   # General server settings
   min_scan_interval: "10s"          # Minimum allowed scan interval
@@ -34,4 +57,14 @@ server:
   dev_mode: false                   # Development mode
 
 # Agent configuration is not needed for server mode
-# Use 'sreootb agent --gen-config' to generate agent configuration 
+# Use 'sreootb agent --gen-config' to generate agent configuration
+
+# Example CockroachDB HA deployment configuration:
+# 1. Set up a 3-node CockroachDB cluster
+# 2. Create the database and user:
+#    CREATE DATABASE sreootb;
+#    CREATE USER sreootb_user WITH PASSWORD 'secure_password';
+#    GRANT ALL ON DATABASE sreootb TO sreootb_user;
+# 3. Deploy this application to 3 servers with identical configuration
+# 4. Each server can connect to the local CockroachDB node for optimal performance
+# 5. The cluster will automatically handle failover and data replication 

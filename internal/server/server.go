@@ -123,7 +123,7 @@ func New(cfg *config.Config, staticFS, appFS embed.FS) (*Server, error) {
 		Msg("Admin API Key - use this key to access the web GUI")
 
 	// Initialize database
-	db, err := database.New(cfg.Server.DBPath)
+	db, err := database.New(&cfg.Server.Database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}

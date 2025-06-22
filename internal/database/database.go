@@ -4,29 +4,64 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 
+	"github.com/x86txt/sreootb/internal/config"
 	"github.com/x86txt/sreootb/internal/models"
 )
 
-// DB wraps a SQLite database connection
+// DatabaseType represents the type of database being used
+type DatabaseType int
+
+const (
+	SQLite DatabaseType = iota
+	CockroachDB
+)
+
+// DB wraps a database connection with type information
 type DB struct {
-	conn *sql.DB
+	conn   *sql.DB
+	dbType DatabaseType
 }
 
-// New creates a new database connection
-func New(dbPath string) (*DB, error) {
-	conn, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on&_journal_mode=WAL")
+// New creates a new database connection based on configuration
+func New(cfg *config.DatabaseConfig) (*DB, error) {
+	var conn *sql.DB
+	var dbType DatabaseType
+	var err error
+
+	switch cfg.Type {
+	case "sqlite":
+		conn, err = openSQLite(cfg)
+		dbType = SQLite
+	case "cockroachdb":
+		conn, err = openCockroachDB(cfg)
+		dbType = CockroachDB
+	default:
+		return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	db := &DB{conn: conn}
+	db := &DB{
+		conn:   conn,
+		dbType: dbType,
+	}
+
+	// Test connection
+	if err := db.conn.Ping(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
 
 	// Initialize tables
 	if err := db.init(); err != nil {
@@ -34,7 +69,52 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 
+	log.Info().Str("type", cfg.Type).Msg("Database connection established")
 	return db, nil
+}
+
+// openSQLite opens a SQLite database connection
+func openSQLite(cfg *config.DatabaseConfig) (*sql.DB, error) {
+	dsn := cfg.SQLitePath + "?_foreign_keys=on&_journal_mode=WAL"
+	return sql.Open("sqlite3", dsn)
+}
+
+// openCockroachDB opens a CockroachDB connection
+func openCockroachDB(cfg *config.DatabaseConfig) (*sql.DB, error) {
+	// Build connection string
+	values := url.Values{}
+	values.Set("sslmode", cfg.SSLMode)
+
+	if cfg.SSLRootCert != "" {
+		values.Set("sslrootcert", cfg.SSLRootCert)
+	}
+	if cfg.SSLCert != "" {
+		values.Set("sslcert", cfg.SSLCert)
+	}
+	if cfg.SSLKey != "" {
+		values.Set("sslkey", cfg.SSLKey)
+	}
+
+	dsn := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?%s",
+		url.QueryEscape(cfg.User),
+		url.QueryEscape(cfg.Password),
+		cfg.Host,
+		cfg.Port,
+		cfg.Database,
+		values.Encode())
+
+	conn, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	// Configure connection pool for high availability
+	conn.SetMaxOpenConns(cfg.MaxOpenConns)
+	conn.SetMaxIdleConns(cfg.MaxIdleConns)
+	conn.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	conn.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+
+	return conn, nil
 }
 
 // Close closes the database connection
@@ -44,7 +124,37 @@ func (db *DB) Close() error {
 
 // init creates the database tables if they don't exist
 func (db *DB) init() error {
-	queries := []string{
+	queries := db.getInitQueries()
+
+	for _, query := range queries {
+		if _, err := db.conn.Exec(query); err != nil {
+			return fmt.Errorf("failed to execute query: %s: %w", query, err)
+		}
+	}
+
+	// Run migrations for existing databases
+	if err := db.migrate(); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	return nil
+}
+
+// getInitQueries returns database initialization queries based on database type
+func (db *DB) getInitQueries() []string {
+	switch db.dbType {
+	case SQLite:
+		return db.getSQLiteInitQueries()
+	case CockroachDB:
+		return db.getCockroachInitQueries()
+	default:
+		return nil
+	}
+}
+
+// getSQLiteInitQueries returns SQLite-specific initialization queries
+func (db *DB) getSQLiteInitQueries() []string {
+	return []string{
 		`CREATE TABLE IF NOT EXISTS sites (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			url TEXT UNIQUE NOT NULL,
@@ -66,7 +176,7 @@ func (db *DB) init() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
 			api_key_hash TEXT UNIQUE NOT NULL,
-			key_type TEXT DEFAULT 'permanent', -- 'bootstrap', 'permanent'
+			key_type TEXT DEFAULT 'permanent',
 			description TEXT,
 			last_seen TIMESTAMP,
 			status TEXT DEFAULT 'offline',
@@ -113,6 +223,7 @@ func (db *DB) init() error {
 			FOREIGN KEY (task_id) REFERENCES monitor_tasks (id) ON DELETE CASCADE,
 			UNIQUE(agent_id, task_id)
 		)`,
+		// Indexes
 		`CREATE INDEX IF NOT EXISTS idx_site_checks_site_id ON site_checks(site_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_site_checks_checked_at ON site_checks(checked_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_agents_api_key_hash ON agents(api_key_hash)`,
@@ -124,34 +235,109 @@ func (db *DB) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_agent_task_assignments_agent_id ON agent_task_assignments(agent_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_task_assignments_task_id ON agent_task_assignments(task_id)`,
 	}
+}
 
-	for _, query := range queries {
-		if _, err := db.conn.Exec(query); err != nil {
-			return fmt.Errorf("failed to execute query: %s: %w", query, err)
-		}
+// getCockroachInitQueries returns CockroachDB-specific initialization queries
+func (db *DB) getCockroachInitQueries() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS sites (
+			id SERIAL PRIMARY KEY,
+			url STRING UNIQUE NOT NULL,
+			name STRING NOT NULL,
+			scan_interval STRING DEFAULT '60s',
+			created_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS site_checks (
+			id SERIAL PRIMARY KEY,
+			site_id INT NOT NULL,
+			status STRING NOT NULL,
+			response_time FLOAT,
+			status_code INT,
+			error_message STRING,
+			checked_at TIMESTAMPTZ DEFAULT NOW(),
+			FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS agents (
+			id SERIAL PRIMARY KEY,
+			name STRING NOT NULL,
+			api_key_hash STRING UNIQUE NOT NULL,
+			key_type STRING DEFAULT 'permanent',
+			description STRING,
+			last_seen TIMESTAMPTZ,
+			status STRING DEFAULT 'offline',
+			os STRING,
+			platform STRING,
+			architecture STRING,
+			version STRING,
+			remote_ip STRING,
+			created_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS monitor_tasks (
+			id SERIAL PRIMARY KEY,
+			site_id INT NOT NULL,
+			monitor_type STRING NOT NULL,
+			url STRING NOT NULL,
+			interval STRING NOT NULL DEFAULT '60s',
+			timeout STRING NOT NULL DEFAULT '10s',
+			enabled BOOL NOT NULL DEFAULT true,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW(),
+			FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS monitor_results (
+			id SERIAL PRIMARY KEY,
+			task_id INT NOT NULL,
+			agent_id INT NOT NULL,
+			status STRING NOT NULL,
+			response_time FLOAT,
+			status_code INT,
+			error_message STRING,
+			metadata STRING,
+			checked_at TIMESTAMPTZ DEFAULT NOW(),
+			FOREIGN KEY (task_id) REFERENCES monitor_tasks (id) ON DELETE CASCADE,
+			FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS agent_task_assignments (
+			id SERIAL PRIMARY KEY,
+			agent_id INT NOT NULL,
+			task_id INT NOT NULL,
+			assigned BOOL NOT NULL DEFAULT true,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW(),
+			FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+			FOREIGN KEY (task_id) REFERENCES monitor_tasks (id) ON DELETE CASCADE,
+			UNIQUE(agent_id, task_id)
+		)`,
+		// Indexes
+		`CREATE INDEX IF NOT EXISTS idx_site_checks_site_id ON site_checks(site_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_site_checks_checked_at ON site_checks(checked_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_agents_api_key_hash ON agents(api_key_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_tasks_site_id ON monitor_tasks(site_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_tasks_enabled ON monitor_tasks(enabled)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_results_task_id ON monitor_results(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_results_agent_id ON monitor_results(agent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_results_checked_at ON monitor_results(checked_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_task_assignments_agent_id ON agent_task_assignments(agent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_task_assignments_task_id ON agent_task_assignments(task_id)`,
 	}
-
-	// Run migrations for existing databases
-	if err := db.migrate(); err != nil {
-		return fmt.Errorf("failed to run migrations: %w", err)
-	}
-
-	return nil
 }
 
 // migrate applies database migrations for existing databases
 func (db *DB) migrate() error {
-	// Check if we need to add OS information columns to agents table
-	if err := db.addOSInfoColumns(); err != nil {
-		return fmt.Errorf("failed to add OS info columns: %w", err)
+	// For SQLite, run the existing migration logic
+	if db.dbType == SQLite {
+		// Check if we need to add OS information columns to agents table
+		if err := db.addOSInfoColumns(); err != nil {
+			return fmt.Errorf("failed to add OS info columns: %w", err)
+		}
+
+		// Check if we need to add key_type column to agents table
+		if err := db.addKeyTypeColumn(); err != nil {
+			return fmt.Errorf("failed to add key_type column: %w", err)
+		}
 	}
 
-	// Check if we need to add key_type column to agents table
-	if err := db.addKeyTypeColumn(); err != nil {
-		return fmt.Errorf("failed to add key_type column: %w", err)
-	}
-
-	// Check if we need to create monitoring tasks for existing sites
+	// For both databases, create monitoring tasks for existing sites
 	if err := db.createMonitoringTasksForExistingSites(); err != nil {
 		return fmt.Errorf("failed to create monitoring tasks for existing sites: %w", err)
 	}
@@ -271,6 +457,47 @@ func (db *DB) createMonitoringTasksForExistingSites() error {
 	return nil
 }
 
+// Helper methods for database-specific SQL
+
+// placeholder returns the appropriate placeholder for the database type
+func (db *DB) placeholder(n int) string {
+	switch db.dbType {
+	case SQLite:
+		return "?"
+	case CockroachDB:
+		return fmt.Sprintf("$%d", n)
+	default:
+		return "?"
+	}
+}
+
+// currentTimestamp returns the appropriate current timestamp expression
+func (db *DB) currentTimestamp() string {
+	switch db.dbType {
+	case SQLite:
+		return "CURRENT_TIMESTAMP"
+	case CockroachDB:
+		return "NOW()"
+	default:
+		return "CURRENT_TIMESTAMP"
+	}
+}
+
+// boolValue returns the appropriate boolean value representation
+func (db *DB) boolValue(b bool) interface{} {
+	switch db.dbType {
+	case SQLite:
+		if b {
+			return 1
+		}
+		return 0
+	case CockroachDB:
+		return b
+	default:
+		return b
+	}
+}
+
 // createMonitoringTaskForSite creates appropriate monitoring tasks for a site based on its URL
 func (db *DB) createMonitoringTaskForSite(siteID int, url, interval string) error {
 	var monitorType string
@@ -291,24 +518,43 @@ func (db *DB) createMonitoringTaskForSite(siteID int, url, interval string) erro
 		timeout = "30s"
 	}
 
-	// Create the monitoring task
-	query := `INSERT INTO monitor_tasks (site_id, monitor_type, url, interval, timeout, enabled) VALUES (?, ?, ?, ?, ?, 1)`
-	_, err := db.conn.Exec(query, siteID, monitorType, url, interval, timeout)
-	return err
+	// Create the monitoring task with database-specific placeholders
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `INSERT INTO monitor_tasks (site_id, monitor_type, url, interval, timeout, enabled) VALUES (?, ?, ?, ?, ?, ?)`
+		_, err := db.conn.Exec(query, siteID, monitorType, url, interval, timeout, db.boolValue(true))
+		return err
+	case CockroachDB:
+		query = `INSERT INTO monitor_tasks (site_id, monitor_type, url, interval, timeout, enabled) VALUES ($1, $2, $3, $4, $5, $6)`
+		_, err := db.conn.Exec(query, siteID, monitorType, url, interval, timeout, db.boolValue(true))
+		return err
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
 }
 
 // Sites
 
 // AddSite adds a new site to monitor
 func (db *DB) AddSite(site *models.SiteCreateRequest) (*models.Site, error) {
-	query := `INSERT INTO sites (url, name, scan_interval) VALUES (?, ?, ?) RETURNING id, created_at`
-
 	var newSite models.Site
 	newSite.URL = site.URL
 	newSite.Name = site.Name
 	newSite.ScanInterval = site.ScanInterval
 
-	err := db.conn.QueryRow(query, site.URL, site.Name, site.ScanInterval).Scan(&newSite.ID, &newSite.CreatedAt)
+	var err error
+	switch db.dbType {
+	case SQLite:
+		query := `INSERT INTO sites (url, name, scan_interval) VALUES (?, ?, ?) RETURNING id, created_at`
+		err = db.conn.QueryRow(query, site.URL, site.Name, site.ScanInterval).Scan(&newSite.ID, &newSite.CreatedAt)
+	case CockroachDB:
+		query := `INSERT INTO sites (url, name, scan_interval) VALUES ($1, $2, $3) RETURNING id, created_at`
+		err = db.conn.QueryRow(query, site.URL, site.Name, site.ScanInterval).Scan(&newSite.ID, &newSite.CreatedAt)
+	default:
+		return nil, fmt.Errorf("unsupported database type")
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to add site: %w", err)
 	}
@@ -345,7 +591,15 @@ func (db *DB) GetSites() ([]*models.Site, error) {
 
 // GetSite returns a site by ID
 func (db *DB) GetSite(id int) (*models.Site, error) {
-	query := `SELECT id, url, name, scan_interval, created_at FROM sites WHERE id = ?`
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `SELECT id, url, name, scan_interval, created_at FROM sites WHERE id = ?`
+	case CockroachDB:
+		query = `SELECT id, url, name, scan_interval, created_at FROM sites WHERE id = $1`
+	default:
+		return nil, fmt.Errorf("unsupported database type")
+	}
 
 	var site models.Site
 	err := db.conn.QueryRow(query, id).Scan(&site.ID, &site.URL, &site.Name, &site.ScanInterval, &site.CreatedAt)
@@ -361,7 +615,15 @@ func (db *DB) GetSite(id int) (*models.Site, error) {
 
 // DeleteSite deletes a site and all its checks
 func (db *DB) DeleteSite(id int) error {
-	query := `DELETE FROM sites WHERE id = ?`
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `DELETE FROM sites WHERE id = ?`
+	case CockroachDB:
+		query = `DELETE FROM sites WHERE id = $1`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
 
 	result, err := db.conn.Exec(query, id)
 	if err != nil {
@@ -384,8 +646,17 @@ func (db *DB) DeleteSite(id int) error {
 
 // RecordCheck records a site check result
 func (db *DB) RecordCheck(check *models.SiteCheck) error {
-	query := `INSERT INTO site_checks (site_id, status, response_time, status_code, error_message) 
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `INSERT INTO site_checks (site_id, status, response_time, status_code, error_message) 
 			  VALUES (?, ?, ?, ?, ?)`
+	case CockroachDB:
+		query = `INSERT INTO site_checks (site_id, status, response_time, status_code, error_message) 
+			  VALUES ($1, $2, $3, $4, $5)`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
 
 	_, err := db.conn.Exec(query, check.SiteID, check.Status, check.ResponseTime, check.StatusCode, check.ErrorMessage)
 	if err != nil {
@@ -440,8 +711,17 @@ func (db *DB) GetSiteStatus() ([]*models.SiteStatus, error) {
 
 // GetSiteHistory returns check history for a specific site
 func (db *DB) GetSiteHistory(siteID int, limit int) ([]*models.SiteCheck, error) {
-	query := `SELECT id, site_id, status, response_time, status_code, error_message, checked_at 
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `SELECT id, site_id, status, response_time, status_code, error_message, checked_at 
 			  FROM site_checks WHERE site_id = ? ORDER BY checked_at DESC LIMIT ?`
+	case CockroachDB:
+		query = `SELECT id, site_id, status, response_time, status_code, error_message, checked_at 
+			  FROM site_checks WHERE site_id = $1 ORDER BY checked_at DESC LIMIT $2`
+	default:
+		return nil, fmt.Errorf("unsupported database type")
+	}
 
 	rows, err := db.conn.Query(query, siteID, limit)
 	if err != nil {
@@ -473,15 +753,24 @@ func (db *DB) AddAgent(agent *models.AgentCreateRequest, apiKeyHash string) (*mo
 		keyType = "bootstrap"
 	}
 
-	query := `INSERT INTO agents (name, api_key_hash, key_type, description) VALUES (?, ?, ?, ?) RETURNING id, created_at`
-
 	var newAgent models.Agent
 	newAgent.Name = agent.Name
 	newAgent.APIKeyHash = apiKeyHash
 	newAgent.Description = agent.Description
 	newAgent.Status = "offline"
 
-	err := db.conn.QueryRow(query, agent.Name, apiKeyHash, keyType, agent.Description).Scan(&newAgent.ID, &newAgent.CreatedAt)
+	var err error
+	switch db.dbType {
+	case SQLite:
+		query := `INSERT INTO agents (name, api_key_hash, key_type, description) VALUES (?, ?, ?, ?) RETURNING id, created_at`
+		err = db.conn.QueryRow(query, agent.Name, apiKeyHash, keyType, agent.Description).Scan(&newAgent.ID, &newAgent.CreatedAt)
+	case CockroachDB:
+		query := `INSERT INTO agents (name, api_key_hash, key_type, description) VALUES ($1, $2, $3, $4) RETURNING id, created_at`
+		err = db.conn.QueryRow(query, agent.Name, apiKeyHash, keyType, agent.Description).Scan(&newAgent.ID, &newAgent.CreatedAt)
+	default:
+		return nil, fmt.Errorf("unsupported database type")
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to add agent: %w", err)
 	}
@@ -515,7 +804,15 @@ func (db *DB) GetAgents() ([]*models.Agent, error) {
 
 // GetAgentByKeyHash returns an agent by API key hash
 func (db *DB) GetAgentByKeyHash(keyHash string) (*models.Agent, error) {
-	query := `SELECT id, name, description, last_seen, status, os, platform, architecture, version, remote_ip, created_at FROM agents WHERE api_key_hash = ?`
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `SELECT id, name, description, last_seen, status, os, platform, architecture, version, remote_ip, created_at FROM agents WHERE api_key_hash = ?`
+	case CockroachDB:
+		query = `SELECT id, name, description, last_seen, status, os, platform, architecture, version, remote_ip, created_at FROM agents WHERE api_key_hash = $1`
+	default:
+		return nil, fmt.Errorf("unsupported database type")
+	}
 
 	var agent models.Agent
 	err := db.conn.QueryRow(query, keyHash).Scan(&agent.ID, &agent.Name, &agent.Description, &agent.LastSeen, &agent.Status,
@@ -532,7 +829,15 @@ func (db *DB) GetAgentByKeyHash(keyHash string) (*models.Agent, error) {
 
 // UpdateAgentOSInfo updates agent OS information and status
 func (db *DB) UpdateAgentOSInfo(keyHash string, status string, osInfo map[string]interface{}) error {
-	query := `UPDATE agents SET status = ?, last_seen = CURRENT_TIMESTAMP, os = ?, platform = ?, architecture = ?, version = ? WHERE api_key_hash = ?`
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `UPDATE agents SET status = ?, last_seen = CURRENT_TIMESTAMP, os = ?, platform = ?, architecture = ?, version = ? WHERE api_key_hash = ?`
+	case CockroachDB:
+		query = `UPDATE agents SET status = $1, last_seen = NOW(), os = $2, platform = $3, architecture = $4, version = $5 WHERE api_key_hash = $6`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
 
 	// Extract OS information from the map
 	var os, platform, architecture, version interface{}
@@ -553,7 +858,15 @@ func (db *DB) UpdateAgentOSInfo(keyHash string, status string, osInfo map[string
 
 // UpdateAgentWithRemoteIP updates agent OS information, status, and remote IP
 func (db *DB) UpdateAgentWithRemoteIP(keyHash string, status string, osInfo map[string]interface{}, remoteIP string) error {
-	query := `UPDATE agents SET status = ?, last_seen = CURRENT_TIMESTAMP, os = ?, platform = ?, architecture = ?, version = ?, remote_ip = ? WHERE api_key_hash = ?`
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `UPDATE agents SET status = ?, last_seen = CURRENT_TIMESTAMP, os = ?, platform = ?, architecture = ?, version = ?, remote_ip = ? WHERE api_key_hash = ?`
+	case CockroachDB:
+		query = `UPDATE agents SET status = $1, last_seen = NOW(), os = $2, platform = $3, architecture = $4, version = $5, remote_ip = $6 WHERE api_key_hash = $7`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
 
 	// Extract OS information from the map
 	var os, platform, architecture, version interface{}
@@ -574,7 +887,15 @@ func (db *DB) UpdateAgentWithRemoteIP(keyHash string, status string, osInfo map[
 
 // UpdateAgentStatus updates agent status and last seen timestamp
 func (db *DB) UpdateAgentStatus(keyHash string, status string) error {
-	query := `UPDATE agents SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE api_key_hash = ?`
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `UPDATE agents SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE api_key_hash = ?`
+	case CockroachDB:
+		query = `UPDATE agents SET status = $1, last_seen = NOW() WHERE api_key_hash = $2`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
 
 	_, err := db.conn.Exec(query, status, keyHash)
 	if err != nil {
@@ -586,7 +907,15 @@ func (db *DB) UpdateAgentStatus(keyHash string, status string) error {
 
 // ValidateAgentAPIKey validates an agent API key hash
 func (db *DB) ValidateAgentAPIKey(keyHash string) (bool, error) {
-	query := `SELECT COUNT(*) FROM agents WHERE api_key_hash = ?`
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `SELECT COUNT(*) FROM agents WHERE api_key_hash = ?`
+	case CockroachDB:
+		query = `SELECT COUNT(*) FROM agents WHERE api_key_hash = $1`
+	default:
+		return false, fmt.Errorf("unsupported database type")
+	}
 
 	var count int
 	err := db.conn.QueryRow(query, keyHash).Scan(&count)
@@ -599,7 +928,15 @@ func (db *DB) ValidateAgentAPIKey(keyHash string) (bool, error) {
 
 // DeleteAgent deletes an agent
 func (db *DB) DeleteAgent(id int) error {
-	query := `DELETE FROM agents WHERE id = ?`
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `DELETE FROM agents WHERE id = ?`
+	case CockroachDB:
+		query = `DELETE FROM agents WHERE id = $1`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
 
 	result, err := db.conn.Exec(query, id)
 	if err != nil {
