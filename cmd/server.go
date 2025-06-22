@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"os"
 	"os/signal"
@@ -15,6 +16,16 @@ import (
 	"github.com/x86txt/sreootb/internal/config"
 	"github.com/x86txt/sreootb/internal/server"
 )
+
+// Global variables to hold the embedded web filesystems
+var staticFS embed.FS
+var appFS embed.FS
+
+// SetWebFS sets the embedded web filesystems from main package
+func SetWebFS(static, app embed.FS) {
+	staticFS = static
+	appFS = app
+}
 
 // serverCmd represents the server command
 var serverCmd = &cobra.Command{
@@ -69,7 +80,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create server instance
-	srv, err := server.New(cfg)
+	srv, err := server.New(cfg, staticFS, appFS)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create server")
 	}

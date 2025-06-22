@@ -3,9 +3,12 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +26,9 @@ import (
 	"github.com/x86txt/sreootb/internal/monitor"
 	"github.com/x86txt/sreootb/internal/utils"
 )
+
+// Note: Web assets will be embedded from main package
+// var webFS embed.FS will be passed from main
 
 // AgentConn represents an active agent WebSocket connection
 type AgentConn struct {
@@ -44,10 +50,12 @@ type Server struct {
 	agentConns  map[string]*AgentConn // Active agent connections
 	connMutex   sync.RWMutex          // Protect agent connections
 	autoTLS     *autotls.Manager      // Auto-TLS manager
+	staticFS    embed.FS              // Next.js static files
+	appFS       embed.FS              // Next.js application files
 }
 
 // New creates a new server instance
-func New(cfg *config.Config) (*Server, error) {
+func New(cfg *config.Config, staticFS, appFS embed.FS) (*Server, error) {
 	// Initialize database
 	db, err := database.New(cfg.Server.DBPath)
 	if err != nil {
@@ -76,6 +84,8 @@ func New(cfg *config.Config) (*Server, error) {
 		monitor:    mon,
 		agentConns: make(map[string]*AgentConn),
 		autoTLS:    autoTLSManager,
+		staticFS:   staticFS,
+		appFS:      appFS,
 	}
 
 	// Setup routers
@@ -329,8 +339,12 @@ func (s *Server) setupWebRouter() {
 		r.Get("/health", s.handleHealth)
 	})
 
-	// Serve embedded frontend
-	r.Get("/*", s.handleIndex)
+	// Serve Next.js static files
+	r.Handle("/_next/*", s.handleStaticFiles())
+	r.Handle("/static/*", s.handleStaticFiles())
+
+	// Serve Next.js application
+	r.Get("/*", s.handleNextJSApp)
 
 	s.webRouter = r
 }
@@ -898,4 +912,229 @@ func (s *Server) writeJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(data)
+}
+
+// handleStaticFiles serves static assets from the embedded Next.js build
+func (s *Server) handleStaticFiles() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Remove the /_next prefix and serve from staticFS
+		path := strings.TrimPrefix(r.URL.Path, "/_next")
+		if path == "" || path == "/" {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Try to open the file from the static filesystem
+		file, err := s.staticFS.Open(strings.TrimPrefix(path, "/"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer file.Close()
+
+		// Set appropriate content type based on file extension
+		ext := filepath.Ext(path)
+		switch ext {
+		case ".js":
+			w.Header().Set("Content-Type", "application/javascript")
+		case ".css":
+			w.Header().Set("Content-Type", "text/css")
+		case ".json":
+			w.Header().Set("Content-Type", "application/json")
+		case ".woff2":
+			w.Header().Set("Content-Type", "font/woff2")
+		case ".woff":
+			w.Header().Set("Content-Type", "font/woff")
+		case ".ttf":
+			w.Header().Set("Content-Type", "font/ttf")
+		case ".png":
+			w.Header().Set("Content-Type", "image/png")
+		case ".jpg", ".jpeg":
+			w.Header().Set("Content-Type", "image/jpeg")
+		case ".svg":
+			w.Header().Set("Content-Type", "image/svg+xml")
+		case ".ico":
+			w.Header().Set("Content-Type", "image/x-icon")
+		}
+
+		// Set cache headers for static assets
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+
+		http.ServeContent(w, r, path, time.Time{}, file.(io.ReadSeeker))
+	})
+}
+
+// handleNextJSApp serves the Next.js application pages
+func (s *Server) handleNextJSApp(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	// Map paths to HTML files in the app directory
+	var htmlFile string
+	switch path {
+	case "/":
+		htmlFile = "index.html"
+	case "/agents":
+		htmlFile = "agents.html"
+	case "/resources/http":
+		htmlFile = "resources/http.html"
+	case "/resources/ping":
+		htmlFile = "resources/ping.html"
+	default:
+		// For any other route, try to find a corresponding HTML file
+		// or fall back to index.html for client-side routing
+		htmlFile = "index.html"
+	}
+
+	// Try to serve the specific HTML file
+	file, err := s.appFS.Open(htmlFile)
+	if err != nil {
+		// If the specific file doesn't exist, serve index.html for client-side routing
+		file, err = s.appFS.Open("index.html")
+		if err != nil {
+			// If index.html doesn't exist, use fallback
+			log.Warn().Str("path", path).Msg("Next.js app files not found, using fallback")
+			s.handleFallbackHTML(w, r)
+			return
+		}
+	}
+	defer file.Close()
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	http.ServeContent(w, r, htmlFile, time.Time{}, file.(io.ReadSeeker))
+}
+
+// handleFallbackHTML serves basic HTML when Next.js files are not available
+func (s *Server) handleFallbackHTML(w http.ResponseWriter, r *http.Request) {
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>SRE: Out of the Box</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; 
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               min-height: 100vh; color: white; }
+        .container { max-width: 1200px; margin: 0 auto; 
+                    background: rgba(255,255,255,0.1); border-radius: 10px; 
+                    padding: 30px; backdrop-filter: blur(10px); }
+        h1 { text-align: center; margin-bottom: 30px; }
+        .stats { display: flex; justify-content: space-around; margin: 20px 0; }
+        .stat { text-align: center; }
+        .stat-value { font-size: 2em; font-weight: bold; display: block; }
+        .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+                      gap: 20px; margin: 30px 0; }
+        .status-card { background: rgba(255,255,255,0.15); border-radius: 8px; padding: 20px; }
+        .info { background: rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; margin: 20px 0; }
+        button { background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3);
+                padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
+        button:hover { background: rgba(255,255,255,0.3); }
+        .warning { background: rgba(255,193,7,0.2); border: 1px solid rgba(255,193,7,0.5); 
+                  border-radius: 8px; padding: 15px; margin: 20px 0; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 SRE: Out of the Box v2</h1>
+        
+        <div class="warning">
+            <strong>⚠️ Fallback Mode:</strong> Next.js frontend not available. Using basic interface.
+        </div>
+        
+        <div class="stats">
+            <div class="stat">
+                <span class="stat-value" id="total-sites">-</span>
+                <span>Total Sites</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="sites-up">-</span>
+                <span>Sites Up</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="sites-down">-</span>
+                <span>Sites Down</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="connected-agents">-</span>
+                <span>Connected Agents</span>
+            </div>
+        </div>
+
+        <div style="text-align: center; margin: 20px 0;">
+            <button onclick="refreshData()">🔄 Refresh</button>
+            <button onclick="manualCheck()">⚡ Manual Check</button>
+        </div>
+        
+        <div id="sites-container" class="status-grid">
+            <div class="status-card">Loading...</div>
+        </div>
+
+        <div class="info">
+            <h3>🔧 Server Configuration</h3>
+            <div id="config-info">Loading configuration...</div>
+        </div>
+
+        <div class="info">
+            <h3>📡 API Endpoints</h3>
+            <div>Web GUI API: <strong>` + s.config.Server.Bind + `</strong></div>
+            <div>Agent API: <strong>` + s.config.Server.AgentBind + `</strong> (WebSocket)</div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchData(url) {
+            const response = await fetch(url);
+            return response.json();
+        }
+
+        async function refreshData() {
+            try {
+                const stats = await fetchData('/api/stats');
+                document.getElementById('total-sites').textContent = stats.total_sites || 0;
+                document.getElementById('sites-up').textContent = stats.sites_up || 0;
+                document.getElementById('sites-down').textContent = stats.sites_down || 0;
+                document.getElementById('connected-agents').textContent = stats.connected_agents || 0;
+
+                const sites = await fetchData('/api/sites/status');
+                const container = document.getElementById('sites-container');
+                
+                if (sites.length === 0) {
+                    container.innerHTML = '<div class="status-card">No sites configured</div>';
+                } else {
+                    container.innerHTML = sites.map(site => 
+                        '<div class="status-card">' +
+                        '<h4>' + site.name + '</h4>' +
+                        '<div>Status: ' + (site.status || 'Unknown') + '</div>' +
+                        '<div>URL: ' + site.url + '</div>' +
+                        '</div>'
+                    ).join('');
+                }
+
+                const config = await fetchData('/api/config');
+                document.getElementById('config-info').innerHTML = 
+                    'Features: ' + config.features.join(', ') + '<br>' +
+                    'Version: ' + config.version + '<br>' +
+                    'WebSocket: ' + (config.agent_webtransport_enabled ? 'Enabled' : 'Disabled');
+            } catch (error) {
+                console.error('Failed to refresh data:', error);
+            }
+        }
+
+        async function manualCheck() {
+            try {
+                await fetch('/api/check/manual', { method: 'POST' });
+                setTimeout(refreshData, 2000);
+            } catch (error) {
+                console.error('Failed to trigger manual check:', error);
+            }
+        }
+
+        refreshData();
+        setInterval(refreshData, 30000);
+    </script>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(html))
 }

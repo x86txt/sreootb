@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"os"
 	"time"
 
@@ -11,9 +12,20 @@ import (
 	"github.com/x86txt/sreootb/cmd"
 )
 
+// Embed the Next.js build output
+//
+//go:embed all:frontend/.next/static
+var staticFS embed.FS
+
+//go:embed all:frontend/.next/server/app
+var appFS embed.FS
+
 func main() {
 	// Initialize logging early
 	initLogging()
+
+	// Set the embedded filesystems for the server to use
+	cmd.SetWebFS(staticFS, appFS)
 
 	// Execute the root command
 	cmd.Execute()
