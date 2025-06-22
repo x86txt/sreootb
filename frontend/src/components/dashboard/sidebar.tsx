@@ -18,7 +18,7 @@ import {
   Search,
   Network,
   Shield,
-  Pi,
+  Key,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { LoginDialog } from "@/components/LoginDialog";
@@ -233,7 +233,7 @@ export function Sidebar({}: SidebarProps) {
           onClick={() => !isAuthenticated && setShowLoginDialog(true)}
         >
           <div className="h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium group-hover:bg-primary/90 transition-colors">
-            {isAuthenticated ? 'A' : <Pi className="h-5 w-5" />}
+            {isAuthenticated ? 'A' : <Key className="h-5 w-5" />}
           </div>
           <div className="ml-3">
             <p className="text-sm font-medium">

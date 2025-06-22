@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { PiKey } from 'react-icons/pi';
+import { Key } from 'lucide-react';
 
 interface LoginDialogProps {
   open: boolean;
@@ -50,7 +50,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center">
             <span className="mr-2">
-              <PiKey size={20} />
+              <Key size={20} />
             </span>
             Enter Admin API Key
           </DialogTitle>

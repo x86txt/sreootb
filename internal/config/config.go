@@ -31,6 +31,8 @@ type ServerConfig struct {
 	AgentTLSKey     string        `mapstructure:"agent_tls_key"`  // Separate TLS key for agent port
 	DBPath          string        `mapstructure:"db_path"`
 	AutoTLS         bool          `mapstructure:"auto_tls"`
+	AdminAPIKey     string        `mapstructure:"admin_api_key"` // Admin API key for web GUI authentication
+	AgentAPIKey     string        `mapstructure:"agent_api_key"` // Agent API key for agent authentication
 	MinScanInterval time.Duration `mapstructure:"min_scan_interval"`
 	MaxScanInterval time.Duration `mapstructure:"max_scan_interval"`
 	DevMode         bool          `mapstructure:"dev_mode"`
@@ -44,6 +46,7 @@ type AgentConfig struct {
 	CheckInterval time.Duration `mapstructure:"check_interval"`
 	Bind          string        `mapstructure:"bind"`
 	UserAgent     string        `mapstructure:"user_agent"`
+	InsecureTLS   bool          `mapstructure:"insecure_tls"` // Skip TLS certificate verification
 }
 
 // Load loads configuration from various sources
@@ -78,6 +81,7 @@ func setDefaults() {
 	viper.SetDefault("server.agent_bind", "0.0.0.0:8081") // Agent API on different port
 	viper.SetDefault("server.db_path", "./sreootb.db")
 	viper.SetDefault("server.auto_tls", true)
+	viper.SetDefault("server.admin_api_key", "sreootb-admin-2024-default-change-me-in-production") // Default admin API key
 	viper.SetDefault("server.min_scan_interval", 10*time.Second)
 	viper.SetDefault("server.max_scan_interval", 24*time.Hour)
 	viper.SetDefault("server.dev_mode", false)
@@ -92,6 +96,7 @@ func setDefaults() {
 	viper.SetDefault("agent.check_interval", 30*time.Second)
 	viper.SetDefault("agent.bind", "127.0.0.1:8082")
 	viper.SetDefault("agent.user_agent", "SREootb-Agent/2.0")
+	viper.SetDefault("agent.insecure_tls", false)
 }
 
 // Validate validates the configuration

@@ -113,8 +113,8 @@ export async function createSite(site: CreateSiteRequest): Promise<{ id: number;
     body: JSON.stringify(site),
   });
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to create site');
+    const errorText = await response.text();
+    throw new Error(errorText || 'Failed to create site');
   }
   return response.json();
 }
@@ -124,8 +124,8 @@ export async function deleteSite(siteId: number): Promise<{ message: string }> {
     method: 'DELETE',
   });
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to delete site');
+    const errorText = await response.text();
+    throw new Error(errorText || 'Failed to delete site');
   }
   return response.json();
 }
@@ -142,13 +142,13 @@ export async function getMonitorStats(): Promise<MonitorStats> {
   return response.json();
 }
 
-export async function triggerManualCheck(): Promise<{ message: string; results: any[] }> {
+export async function triggerManualCheck(): Promise<{ message: string }> {
   const response = await fetch(`${API_BASE}/check/manual`, {
     method: 'POST',
   });
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to trigger manual check');
+    const errorText = await response.text();
+    throw new Error(errorText || 'Failed to trigger manual check');
   }
   return response.json();
 }
@@ -180,13 +180,14 @@ export async function getSitesAnalytics(
   return response.json();
 }
 
-export async function refreshAgentSecurity(siteId: number): Promise<{ message: string; site_id: number; security_info: any }> {
-  const response = await fetch(`${API_BASE}/agents/${siteId}/refresh-security`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Failed to refresh agent security');
-  }
-  return response.json();
-} 
+// Note: refreshAgentSecurity is not implemented in the current backend
+// export async function refreshAgentSecurity(siteId: number): Promise<{ message: string; site_id: number; security_info: any }> {
+//   const response = await fetch(`${API_BASE}/agents/${siteId}/refresh-security`, {
+//     method: 'POST',
+//   });
+//   if (!response.ok) {
+//     const errorText = await response.text();
+//     throw new Error(errorText || 'Failed to refresh agent security');
+//   }
+//   return response.json();
+// } 

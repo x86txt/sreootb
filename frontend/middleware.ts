@@ -6,6 +6,15 @@ const PROTECTED_ROUTES = ['/resources', '/agents'];
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   
+  // Skip middleware for static assets and API routes
+  if (
+    pathname.startsWith('/_next/') ||
+    pathname.startsWith('/api/') ||
+    pathname.includes('.')
+  ) {
+    return NextResponse.next();
+  }
+  
   // For now, we'll assume no auth token means not authenticated.
   // We will enhance this later to check a real token.
   const isAuthenticated = request.cookies.has('apiKey');
@@ -27,7 +36,8 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
+     * - Files with extensions (images, stylesheets, etc.)
      */
-    '/((?!api|_next/static|_next/image|favicon.ico).*)',
+    '/((?!api|_next/static|_next/image|favicon.ico|.*\\..*).*)',
   ],
 }; 

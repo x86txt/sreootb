@@ -35,7 +35,8 @@ func init() {
 	agentCmd.Flags().String("api-key", "", "API key for agent authentication")
 	agentCmd.Flags().String("agent-id", "", "unique identifier for this agent")
 	agentCmd.Flags().Duration("check-interval", 0, "interval between server checks")
-	agentCmd.Flags().String("bind", "127.0.0.1:8081", "address to bind the agent health endpoint")
+	agentCmd.Flags().String("bind", "127.0.0.1:8082", "address to bind the agent health endpoint")
+	agentCmd.Flags().Bool("insecure", false, "skip TLS certificate verification (insecure)")
 
 	// Config generation flags
 	agentCmd.Flags().Bool("gen-config", false, "generate sample agent configuration file")
@@ -47,6 +48,7 @@ func init() {
 	viper.BindPFlag("agent.agent_id", agentCmd.Flags().Lookup("agent-id"))
 	viper.BindPFlag("agent.check_interval", agentCmd.Flags().Lookup("check-interval"))
 	viper.BindPFlag("agent.bind", agentCmd.Flags().Lookup("bind"))
+	viper.BindPFlag("agent.insecure_tls", agentCmd.Flags().Lookup("insecure"))
 }
 
 func runAgent(cmd *cobra.Command, args []string) error {
@@ -120,6 +122,7 @@ agent:
   check_interval: "30s"                        # How often to check in with server
   bind: "127.0.0.1:8082"                       # Health endpoint bind address
   user_agent: "SREootb-Agent/2.0"               # User agent for HTTP requests
+  insecure_tls: false                          # Skip TLS certificate verification (insecure)
 
 # Server configuration is not needed for agent mode
 # Use 'sreootb server --gen-config' to generate server configuration

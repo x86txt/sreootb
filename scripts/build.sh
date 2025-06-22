@@ -66,6 +66,97 @@ print_help() {
     echo -e "  ${DARK_GRAY}Single target:${NC} Creates binary in current directory"
     echo -e "  ${DARK_GRAY}Multiple targets:${NC} Creates binaries in ${GRAY}dist/${NC} directory"
     echo ""
+    echo -e "${BOLD}FEATURES:${NC}"
+    echo -e "  ${DARK_GRAY}Frontend:${NC} Automatically builds and embeds React SPA"
+    echo -e "  ${DARK_GRAY}Static assets:${NC} Bundles web files into Go binary"
+    echo ""
+}
+
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to build frontend
+build_frontend() {
+    print_build "Building frontend SPA..."
+    
+    if [ ! -d "frontend" ]; then
+        print_warning "Frontend directory not found, skipping frontend build"
+        return 0
+    fi
+    
+    cd frontend
+    
+    # Check for package manager
+    if command_exists pnpm; then
+        PACKAGE_MANAGER="pnpm"
+    elif command_exists npm; then
+        PACKAGE_MANAGER="npm"
+    elif command_exists yarn; then
+        PACKAGE_MANAGER="yarn"
+    else
+        print_warning "No package manager found (pnpm, npm, or yarn). Skipping frontend build."
+        cd ..
+        return 1
+    fi
+    
+    print_info "Using package manager: $PACKAGE_MANAGER"
+    
+    # Install dependencies if node_modules doesn't exist
+    if [ ! -d "node_modules" ]; then
+        print_build "Installing frontend dependencies..."
+        case $PACKAGE_MANAGER in
+            pnpm)
+                pnpm install --frozen-lockfile
+                ;;
+            npm)
+                npm ci
+                ;;
+            yarn)
+                yarn install --frozen-lockfile
+                ;;
+        esac
+    fi
+    
+    # Clean previous build
+    print_build "Cleaning previous frontend build..."
+    case $PACKAGE_MANAGER in
+        pnpm)
+            pnpm run clean
+            ;;
+        npm)
+            npm run clean
+            ;;
+        yarn)
+            yarn clean
+            ;;
+    esac
+    
+    # Build the frontend for Go embedding
+    print_build "Building frontend for Go embedding..."
+    case $PACKAGE_MANAGER in
+        pnpm)
+            pnpm run build:go
+            ;;
+        npm)
+            npm run build:go
+            ;;
+        yarn)
+            yarn build:go
+            ;;
+    esac
+    
+    if [ $? -eq 0 ]; then
+        print_info "✅ Frontend build complete: frontend/dist/"
+    else
+        print_warning "❌ Frontend build failed"
+        cd ..
+        return 1
+    fi
+    
+    cd ..
+    return 0
 }
 
 # Parse arguments - show help if no arguments provided
@@ -178,6 +269,11 @@ for os in "${OS_LIST[@]}"; do
 done
 
 print_info "Building targets: ${BUILD_TARGETS[*]}"
+
+# Build frontend first
+if ! build_frontend; then
+    print_warning "Frontend build failed, but continuing with backend build..."
+fi
 
 # Build flags
 LDFLAGS="-X github.com/x86txt/sreootb/cmd.Version=$VERSION -X github.com/x86txt/sreootb/cmd.Commit=$COMMIT -X github.com/x86txt/sreootb/cmd.Date=$DATE"

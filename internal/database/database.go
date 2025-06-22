@@ -2,9 +2,12 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog/log"
 
 	"github.com/x86txt/sreootb/internal/models"
 )
@@ -64,11 +67,59 @@ func (db *DB) init() error {
 			description TEXT,
 			last_seen TIMESTAMP,
 			status TEXT DEFAULT 'offline',
+			os TEXT,
+			platform TEXT,
+			architecture TEXT,
+			version TEXT,
+			remote_ip TEXT,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS monitor_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			site_id INTEGER NOT NULL,
+			monitor_type TEXT NOT NULL,
+			url TEXT NOT NULL,
+			interval TEXT NOT NULL DEFAULT '60s',
+			timeout TEXT NOT NULL DEFAULT '10s',
+			enabled BOOLEAN NOT NULL DEFAULT 1,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS monitor_results (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL,
+			agent_id INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			response_time REAL,
+			status_code INTEGER,
+			error_message TEXT,
+			metadata TEXT,
+			checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (task_id) REFERENCES monitor_tasks (id) ON DELETE CASCADE,
+			FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS agent_task_assignments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id INTEGER NOT NULL,
+			task_id INTEGER NOT NULL,
+			assigned BOOLEAN NOT NULL DEFAULT 1,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+			FOREIGN KEY (task_id) REFERENCES monitor_tasks (id) ON DELETE CASCADE,
+			UNIQUE(agent_id, task_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_site_checks_site_id ON site_checks(site_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_site_checks_checked_at ON site_checks(checked_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_agents_api_key_hash ON agents(api_key_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_tasks_site_id ON monitor_tasks(site_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_tasks_enabled ON monitor_tasks(enabled)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_results_task_id ON monitor_results(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_results_agent_id ON monitor_results(agent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_monitor_results_checked_at ON monitor_results(checked_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_task_assignments_agent_id ON agent_task_assignments(agent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_task_assignments_task_id ON agent_task_assignments(task_id)`,
 	}
 
 	for _, query := range queries {
@@ -77,7 +128,145 @@ func (db *DB) init() error {
 		}
 	}
 
+	// Run migrations for existing databases
+	if err := db.migrate(); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
 	return nil
+}
+
+// migrate applies database migrations for existing databases
+func (db *DB) migrate() error {
+	// Check if we need to add OS information columns to agents table
+	if err := db.addOSInfoColumns(); err != nil {
+		return fmt.Errorf("failed to add OS info columns: %w", err)
+	}
+
+	// Check if we need to create monitoring tasks for existing sites
+	if err := db.createMonitoringTasksForExistingSites(); err != nil {
+		return fmt.Errorf("failed to create monitoring tasks for existing sites: %w", err)
+	}
+
+	return nil
+}
+
+// addOSInfoColumns adds OS information columns to the agents table if they don't exist
+func (db *DB) addOSInfoColumns() error {
+	// Check if os column exists
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='os'").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check for os column: %w", err)
+	}
+
+	// If os column doesn't exist, add all the new columns
+	if count == 0 {
+		migrations := []string{
+			"ALTER TABLE agents ADD COLUMN os TEXT",
+			"ALTER TABLE agents ADD COLUMN platform TEXT",
+			"ALTER TABLE agents ADD COLUMN architecture TEXT",
+			"ALTER TABLE agents ADD COLUMN version TEXT",
+		}
+
+		for _, migration := range migrations {
+			if _, err := db.conn.Exec(migration); err != nil {
+				return fmt.Errorf("failed to execute migration '%s': %w", migration, err)
+			}
+		}
+
+		fmt.Println("✅ Added OS information columns to agents table")
+	}
+
+	// Check if remote_ip column exists (separate migration)
+	err = db.conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='remote_ip'").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check for remote_ip column: %w", err)
+	}
+
+	if count == 0 {
+		if _, err := db.conn.Exec("ALTER TABLE agents ADD COLUMN remote_ip TEXT"); err != nil {
+			return fmt.Errorf("failed to add remote_ip column: %w", err)
+		}
+		fmt.Println("✅ Added remote_ip column to agents table")
+	}
+
+	return nil
+}
+
+// createMonitoringTasksForExistingSites creates monitoring tasks for existing sites that don't have them
+func (db *DB) createMonitoringTasksForExistingSites() error {
+	// Get all sites that don't have monitoring tasks
+	query := `
+		SELECT s.id, s.url, s.scan_interval 
+		FROM sites s 
+		WHERE NOT EXISTS (
+			SELECT 1 FROM monitor_tasks mt WHERE mt.site_id = s.id
+		)
+	`
+
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return fmt.Errorf("failed to query sites without monitoring tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var sitesToMigrate []struct {
+		ID           int
+		URL          string
+		ScanInterval string
+	}
+
+	for rows.Next() {
+		var site struct {
+			ID           int
+			URL          string
+			ScanInterval string
+		}
+		if err := rows.Scan(&site.ID, &site.URL, &site.ScanInterval); err != nil {
+			return fmt.Errorf("failed to scan site: %w", err)
+		}
+		sitesToMigrate = append(sitesToMigrate, site)
+	}
+
+	// Create monitoring tasks for these sites
+	for _, site := range sitesToMigrate {
+		if err := db.createMonitoringTaskForSite(site.ID, site.URL, site.ScanInterval); err != nil {
+			return fmt.Errorf("failed to create monitoring task for site %d: %w", site.ID, err)
+		}
+	}
+
+	if len(sitesToMigrate) > 0 {
+		fmt.Printf("✅ Created monitoring tasks for %d existing sites\n", len(sitesToMigrate))
+	}
+
+	return nil
+}
+
+// createMonitoringTaskForSite creates appropriate monitoring tasks for a site based on its URL
+func (db *DB) createMonitoringTaskForSite(siteID int, url, interval string) error {
+	var monitorType string
+	var timeout string = "10s"
+
+	// Determine monitor type based on URL
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		monitorType = "http"
+		timeout = "30s"
+	} else if strings.HasPrefix(url, "ping://") {
+		monitorType = "ping"
+		timeout = "5s"
+		// Remove ping:// prefix for the actual URL
+		url = strings.TrimPrefix(url, "ping://")
+	} else {
+		// Default to HTTP for unknown protocols
+		monitorType = "http"
+		timeout = "30s"
+	}
+
+	// Create the monitoring task
+	query := `INSERT INTO monitor_tasks (site_id, monitor_type, url, interval, timeout, enabled) VALUES (?, ?, ?, ?, ?, 1)`
+	_, err := db.conn.Exec(query, siteID, monitorType, url, interval, timeout)
+	return err
 }
 
 // Sites
@@ -94,6 +283,11 @@ func (db *DB) AddSite(site *models.SiteCreateRequest) (*models.Site, error) {
 	err := db.conn.QueryRow(query, site.URL, site.Name, site.ScanInterval).Scan(&newSite.ID, &newSite.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add site: %w", err)
+	}
+
+	// Create monitoring task for this site
+	if err := db.createMonitoringTaskForSite(newSite.ID, newSite.URL, newSite.ScanInterval); err != nil {
+		log.Warn().Err(err).Int("site_id", newSite.ID).Msg("Failed to create monitoring task for new site")
 	}
 
 	return &newSite, nil
@@ -263,7 +457,7 @@ func (db *DB) AddAgent(agent *models.AgentCreateRequest, apiKeyHash string) (*mo
 
 // GetAgents returns all agents
 func (db *DB) GetAgents() ([]*models.Agent, error) {
-	query := `SELECT id, name, description, last_seen, status, created_at FROM agents ORDER BY name`
+	query := `SELECT id, name, description, last_seen, status, os, platform, architecture, version, remote_ip, created_at, api_key_hash FROM agents ORDER BY name`
 
 	rows, err := db.conn.Query(query)
 	if err != nil {
@@ -274,7 +468,8 @@ func (db *DB) GetAgents() ([]*models.Agent, error) {
 	var agents []*models.Agent
 	for rows.Next() {
 		var agent models.Agent
-		err := rows.Scan(&agent.ID, &agent.Name, &agent.Description, &agent.LastSeen, &agent.Status, &agent.CreatedAt)
+		err := rows.Scan(&agent.ID, &agent.Name, &agent.Description, &agent.LastSeen, &agent.Status,
+			&agent.OS, &agent.Platform, &agent.Architecture, &agent.Version, &agent.RemoteIP, &agent.CreatedAt, &agent.APIKeyHash)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan agent: %w", err)
 		}
@@ -286,10 +481,11 @@ func (db *DB) GetAgents() ([]*models.Agent, error) {
 
 // GetAgentByKeyHash returns an agent by API key hash
 func (db *DB) GetAgentByKeyHash(keyHash string) (*models.Agent, error) {
-	query := `SELECT id, name, description, last_seen, status, created_at FROM agents WHERE api_key_hash = ?`
+	query := `SELECT id, name, description, last_seen, status, os, platform, architecture, version, remote_ip, created_at FROM agents WHERE api_key_hash = ?`
 
 	var agent models.Agent
-	err := db.conn.QueryRow(query, keyHash).Scan(&agent.ID, &agent.Name, &agent.Description, &agent.LastSeen, &agent.Status, &agent.CreatedAt)
+	err := db.conn.QueryRow(query, keyHash).Scan(&agent.ID, &agent.Name, &agent.Description, &agent.LastSeen, &agent.Status,
+		&agent.OS, &agent.Platform, &agent.Architecture, &agent.Version, &agent.RemoteIP, &agent.CreatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -298,6 +494,48 @@ func (db *DB) GetAgentByKeyHash(keyHash string) (*models.Agent, error) {
 	}
 
 	return &agent, nil
+}
+
+// UpdateAgentOSInfo updates agent OS information and status
+func (db *DB) UpdateAgentOSInfo(keyHash string, status string, osInfo map[string]interface{}) error {
+	query := `UPDATE agents SET status = ?, last_seen = CURRENT_TIMESTAMP, os = ?, platform = ?, architecture = ?, version = ? WHERE api_key_hash = ?`
+
+	// Extract OS information from the map
+	var os, platform, architecture, version interface{}
+	if osInfo != nil {
+		os = osInfo["os"]
+		platform = osInfo["platform"]
+		architecture = osInfo["architecture"]
+		version = osInfo["version"]
+	}
+
+	_, err := db.conn.Exec(query, status, os, platform, architecture, version, keyHash)
+	if err != nil {
+		return fmt.Errorf("failed to update agent OS info: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateAgentWithRemoteIP updates agent OS information, status, and remote IP
+func (db *DB) UpdateAgentWithRemoteIP(keyHash string, status string, osInfo map[string]interface{}, remoteIP string) error {
+	query := `UPDATE agents SET status = ?, last_seen = CURRENT_TIMESTAMP, os = ?, platform = ?, architecture = ?, version = ?, remote_ip = ? WHERE api_key_hash = ?`
+
+	// Extract OS information from the map
+	var os, platform, architecture, version interface{}
+	if osInfo != nil {
+		os = osInfo["os"]
+		platform = osInfo["platform"]
+		architecture = osInfo["architecture"]
+		version = osInfo["version"]
+	}
+
+	_, err := db.conn.Exec(query, status, os, platform, architecture, version, remoteIP, keyHash)
+	if err != nil {
+		return fmt.Errorf("failed to update agent with remote IP: %w", err)
+	}
+
+	return nil
 }
 
 // UpdateAgentStatus updates agent status and last seen timestamp
@@ -376,4 +614,183 @@ func (db *DB) GetMonitorStats() (*models.MonitorStats, error) {
 	}
 
 	return &stats, nil
+}
+
+// Monitoring Tasks
+
+// GetMonitoringTasks returns all monitoring tasks
+func (db *DB) GetMonitoringTasks() ([]*models.MonitorTask, error) {
+	query := `SELECT id, site_id, monitor_type, url, interval, timeout, enabled, created_at, updated_at FROM monitor_tasks ORDER BY id`
+
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get monitoring tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []*models.MonitorTask
+	for rows.Next() {
+		var task models.MonitorTask
+		err := rows.Scan(&task.ID, &task.SiteID, &task.MonitorType, &task.URL, &task.Interval, &task.Timeout, &task.Enabled, &task.CreatedAt, &task.UpdatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan monitoring task: %w", err)
+		}
+		tasks = append(tasks, &task)
+	}
+
+	return tasks, nil
+}
+
+// GetEnabledMonitoringTasks returns all enabled monitoring tasks
+func (db *DB) GetEnabledMonitoringTasks() ([]*models.MonitorTask, error) {
+	query := `SELECT id, site_id, monitor_type, url, interval, timeout, enabled, created_at, updated_at FROM monitor_tasks WHERE enabled = 1 ORDER BY id`
+
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get enabled monitoring tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []*models.MonitorTask
+	for rows.Next() {
+		var task models.MonitorTask
+		err := rows.Scan(&task.ID, &task.SiteID, &task.MonitorType, &task.URL, &task.Interval, &task.Timeout, &task.Enabled, &task.CreatedAt, &task.UpdatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan monitoring task: %w", err)
+		}
+		tasks = append(tasks, &task)
+	}
+
+	return tasks, nil
+}
+
+// GetTasksForAgent returns monitoring tasks assigned to a specific agent
+func (db *DB) GetTasksForAgent(agentID int) ([]*models.MonitorTask, error) {
+	// For now, assign all enabled tasks to all agents (can be refined later)
+	query := `
+		SELECT mt.id, mt.site_id, mt.monitor_type, mt.url, mt.interval, mt.timeout, mt.enabled, mt.created_at, mt.updated_at 
+		FROM monitor_tasks mt 
+		WHERE mt.enabled = 1 
+		ORDER BY mt.id
+	`
+
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tasks for agent: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []*models.MonitorTask
+	for rows.Next() {
+		var task models.MonitorTask
+		err := rows.Scan(&task.ID, &task.SiteID, &task.MonitorType, &task.URL, &task.Interval, &task.Timeout, &task.Enabled, &task.CreatedAt, &task.UpdatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan monitoring task: %w", err)
+		}
+		tasks = append(tasks, &task)
+	}
+
+	return tasks, nil
+}
+
+// Monitoring Results
+
+// RecordMonitorResult records a monitoring result from an agent
+func (db *DB) RecordMonitorResult(result *models.MonitorResultRequest, agentID int) error {
+	// Convert metadata to JSON if provided
+	var metadataJSON *string
+	if result.Metadata != nil && len(result.Metadata) > 0 {
+		if jsonBytes, err := json.Marshal(result.Metadata); err == nil {
+			metadataStr := string(jsonBytes)
+			metadataJSON = &metadataStr
+		}
+	}
+
+	query := `INSERT INTO monitor_results (task_id, agent_id, status, response_time, status_code, error_message, metadata, checked_at) 
+			  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+
+	_, err := db.conn.Exec(query, result.TaskID, agentID, result.Status, result.ResponseTime, result.StatusCode, result.ErrorMessage, metadataJSON, result.CheckedAt)
+	if err != nil {
+		return fmt.Errorf("failed to record monitoring result: %w", err)
+	}
+
+	return nil
+}
+
+// GetMonitorResults returns monitoring results with optional filtering
+func (db *DB) GetMonitorResults(limit int, agentID *int, taskID *int) ([]*models.MonitorResult, error) {
+	query := `SELECT id, task_id, agent_id, status, response_time, status_code, error_message, metadata, checked_at FROM monitor_results`
+	args := []interface{}{}
+	conditions := []string{}
+
+	if agentID != nil {
+		conditions = append(conditions, "agent_id = ?")
+		args = append(args, *agentID)
+	}
+
+	if taskID != nil {
+		conditions = append(conditions, "task_id = ?")
+		args = append(args, *taskID)
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	query += " ORDER BY checked_at DESC"
+
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get monitoring results: %w", err)
+	}
+	defer rows.Close()
+
+	var results []*models.MonitorResult
+	for rows.Next() {
+		var result models.MonitorResult
+		err := rows.Scan(&result.ID, &result.TaskID, &result.AgentID, &result.Status, &result.ResponseTime, &result.StatusCode, &result.ErrorMessage, &result.Metadata, &result.CheckedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan monitoring result: %w", err)
+		}
+		results = append(results, &result)
+	}
+
+	return results, nil
+}
+
+// GetLatestMonitorResults returns the latest result for each task-agent combination
+func (db *DB) GetLatestMonitorResults() ([]*models.MonitorResult, error) {
+	query := `
+		SELECT mr1.id, mr1.task_id, mr1.agent_id, mr1.status, mr1.response_time, mr1.status_code, mr1.error_message, mr1.metadata, mr1.checked_at
+		FROM monitor_results mr1
+		INNER JOIN (
+			SELECT task_id, agent_id, MAX(checked_at) as max_checked_at
+			FROM monitor_results
+			GROUP BY task_id, agent_id
+		) mr2 ON mr1.task_id = mr2.task_id AND mr1.agent_id = mr2.agent_id AND mr1.checked_at = mr2.max_checked_at
+		ORDER BY mr1.checked_at DESC
+	`
+
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get latest monitoring results: %w", err)
+	}
+	defer rows.Close()
+
+	var results []*models.MonitorResult
+	for rows.Next() {
+		var result models.MonitorResult
+		err := rows.Scan(&result.ID, &result.TaskID, &result.AgentID, &result.Status, &result.ResponseTime, &result.StatusCode, &result.ErrorMessage, &result.Metadata, &result.CheckedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan monitoring result: %w", err)
+		}
+		results = append(results, &result)
+	}
+
+	return results, nil
 }
