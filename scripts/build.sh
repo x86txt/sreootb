@@ -278,14 +278,14 @@ fi
 # Build flags
 LDFLAGS="-X github.com/x86txt/sreootb/cmd.Version=$VERSION -X github.com/x86txt/sreootb/cmd.Commit=$COMMIT -X github.com/x86txt/sreootb/cmd.Date=$DATE"
 
-# Determine if we need dist directory (multiple targets)
+# Determine if we need built directory (multiple targets)
 if [ ${#BUILD_TARGETS[@]} -eq 1 ]; then
-    USE_DIST=false
+    USE_BUILT=false
     OUTPUT_NAME="sreootb"
 else
-    USE_DIST=true
-    DIST_DIR="dist"
-    mkdir -p "$DIST_DIR"
+    USE_BUILT=true
+    BUILT_DIR="built"
+    mkdir -p "$BUILT_DIR"
 fi
 
 # Build each target
@@ -293,17 +293,17 @@ for build_target in "${BUILD_TARGETS[@]}"; do
     IFS='-' read -r goos goarch <<< "$build_target"
     
     # Set output filename
-    if [ "$USE_DIST" = true ]; then
+    if [ "$USE_BUILT" = true ]; then
         if [ "$goos" = "windows" ]; then
-            output_file="$DIST_DIR/sreootb-${build_target}.exe"
+            output_file="$BUILT_DIR/sreootb-${build_target}.exe"
         else
-            output_file="$DIST_DIR/sreootb-${build_target}"
+            output_file="$BUILT_DIR/sreootb-${build_target}"
         fi
     else
         if [ "$goos" = "windows" ]; then
-            output_file="sreootb.exe"
+            output_file="built/sreootb.exe"
         else
-            output_file="sreootb"
+            output_file="built/sreootb"
         fi
     fi
     
@@ -325,11 +325,11 @@ done
 
 print_info "🎉 All builds complete!"
 
-if [ "$USE_DIST" = true ]; then
-    print_info "Binaries available in: $DIST_DIR/"
+if [ "$USE_BUILT" = true ]; then
+    print_info "Binaries available in: $BUILT_DIR/"
     echo ""
     print_info "Built targets:"
-    ls -la "$DIST_DIR/"
+    ls -la "$BUILT_DIR/"
 else
     print_info "Test with: ./$output_file --version"
     

@@ -66,6 +66,7 @@ func (db *DB) init() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
 			api_key_hash TEXT UNIQUE NOT NULL,
+			key_type TEXT DEFAULT 'permanent', -- 'bootstrap', 'permanent'
 			description TEXT,
 			last_seen TIMESTAMP,
 			status TEXT DEFAULT 'offline',
@@ -145,6 +146,11 @@ func (db *DB) migrate() error {
 		return fmt.Errorf("failed to add OS info columns: %w", err)
 	}
 
+	// Check if we need to add key_type column to agents table
+	if err := db.addKeyTypeColumn(); err != nil {
+		return fmt.Errorf("failed to add key_type column: %w", err)
+	}
+
 	// Check if we need to create monitoring tasks for existing sites
 	if err := db.createMonitoringTasksForExistingSites(); err != nil {
 		return fmt.Errorf("failed to create monitoring tasks for existing sites: %w", err)
@@ -191,6 +197,26 @@ func (db *DB) addOSInfoColumns() error {
 			return fmt.Errorf("failed to add remote_ip column: %w", err)
 		}
 		fmt.Println("✅ Added remote_ip column to agents table")
+	}
+
+	return nil
+}
+
+// addKeyTypeColumn adds the key_type column to the agents table if it doesn't exist
+func (db *DB) addKeyTypeColumn() error {
+	// Check if key_type column exists
+	var count int
+	err := db.conn.QueryRow("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='key_type'").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to check for key_type column: %w", err)
+	}
+
+	// If key_type column doesn't exist, add it
+	if count == 0 {
+		if _, err := db.conn.Exec("ALTER TABLE agents ADD COLUMN key_type TEXT DEFAULT 'permanent'"); err != nil {
+			return fmt.Errorf("failed to add key_type column: %w", err)
+		}
+		fmt.Println("✅ Added key_type column to agents table")
 	}
 
 	return nil
@@ -441,7 +467,13 @@ func (db *DB) GetSiteHistory(siteID int, limit int) ([]*models.SiteCheck, error)
 
 // AddAgent adds a new agent
 func (db *DB) AddAgent(agent *models.AgentCreateRequest, apiKeyHash string) (*models.Agent, error) {
-	query := `INSERT INTO agents (name, api_key_hash, description) VALUES (?, ?, ?) RETURNING id, created_at`
+	// Determine key type based on registration type
+	keyType := "permanent" // default
+	if agent.RegistrationType != nil && *agent.RegistrationType == "auto" {
+		keyType = "bootstrap"
+	}
+
+	query := `INSERT INTO agents (name, api_key_hash, key_type, description) VALUES (?, ?, ?, ?) RETURNING id, created_at`
 
 	var newAgent models.Agent
 	newAgent.Name = agent.Name
@@ -449,7 +481,7 @@ func (db *DB) AddAgent(agent *models.AgentCreateRequest, apiKeyHash string) (*mo
 	newAgent.Description = agent.Description
 	newAgent.Status = "offline"
 
-	err := db.conn.QueryRow(query, agent.Name, apiKeyHash, agent.Description).Scan(&newAgent.ID, &newAgent.CreatedAt)
+	err := db.conn.QueryRow(query, agent.Name, apiKeyHash, keyType, agent.Description).Scan(&newAgent.ID, &newAgent.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add agent: %w", err)
 	}
@@ -954,4 +986,57 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 		"data":  dataPoints,
 		"sites": sites,
 	}, nil
+}
+
+// UpgradeAgentKey upgrades an agent from bootstrap to permanent key
+func (db *DB) UpgradeAgentKey(currentKeyHash, newKeyHash string) error {
+	// Update the agent's API key hash and set key_type to permanent
+	query := `UPDATE agents SET api_key_hash = ?, key_type = 'permanent' WHERE api_key_hash = ? AND key_type = 'bootstrap'`
+
+	result, err := db.conn.Exec(query, newKeyHash, currentKeyHash)
+	if err != nil {
+		return fmt.Errorf("failed to upgrade agent key: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("no bootstrap agent found with provided key")
+	}
+
+	return nil
+}
+
+// IsBootstrapKey checks if the given key hash belongs to a bootstrap agent
+func (db *DB) IsBootstrapKey(keyHash string) (bool, error) {
+	query := `SELECT COUNT(*) FROM agents WHERE api_key_hash = ? AND key_type = 'bootstrap'`
+
+	var count int
+	err := db.conn.QueryRow(query, keyHash).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if key is bootstrap: %w", err)
+	}
+
+	return count > 0, nil
+}
+
+// GetAgentByKeyHashWithType returns an agent by API key hash including key type
+func (db *DB) GetAgentByKeyHashWithType(keyHash string) (*models.Agent, string, error) {
+	query := `SELECT id, name, description, last_seen, status, os, platform, architecture, version, remote_ip, created_at, key_type FROM agents WHERE api_key_hash = ?`
+
+	var agent models.Agent
+	var keyType string
+	err := db.conn.QueryRow(query, keyHash).Scan(&agent.ID, &agent.Name, &agent.Description, &agent.LastSeen, &agent.Status,
+		&agent.OS, &agent.Platform, &agent.Architecture, &agent.Version, &agent.RemoteIP, &agent.CreatedAt, &keyType)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, "", nil
+		}
+		return nil, "", fmt.Errorf("failed to get agent: %w", err)
+	}
+
+	return &agent, keyType, nil
 }

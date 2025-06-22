@@ -156,7 +156,8 @@ export default function AgentsPage() {
     // Determine security based on real connection info
     // Agent is secure if it's connected via HTTPS/WSS and currently online/connected
     const isConnected = agent.connected === true || agent.status === 'online';
-    const isSecure = isConnected && serverURL.startsWith('https'); // Secure if connected via HTTPS server
+    // Use window.location to determine if we're on HTTPS, which means agents use WSS
+    const isSecure = isConnected && (window.location.protocol === 'https:' || serverURL.startsWith('https'));
     
     return {
       ...agent,

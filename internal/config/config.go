@@ -79,7 +79,7 @@ func setDefaults() {
 	// Server defaults
 	viper.SetDefault("server.bind", "0.0.0.0:8080")
 	viper.SetDefault("server.agent_bind", "0.0.0.0:8081") // Agent API on different port
-	viper.SetDefault("server.db_path", "./sreootb.db")
+	viper.SetDefault("server.db_path", "./db/sreootb.db")
 	viper.SetDefault("server.auto_tls", true)
 	viper.SetDefault("server.admin_api_key", "sreootb-admin-2024-default-change-me-in-production") // Default admin API key
 	viper.SetDefault("server.min_scan_interval", 10*time.Second)

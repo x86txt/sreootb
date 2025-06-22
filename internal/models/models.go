@@ -88,9 +88,10 @@ type SiteCreateRequest struct {
 
 // AgentCreateRequest represents a request to create a new agent
 type AgentCreateRequest struct {
-	Name        string  `json:"name" validate:"required,min=1"`
-	APIKey      string  `json:"api_key" validate:"required,min=64"`
-	Description *string `json:"description"`
+	Name             string  `json:"name" validate:"required,min=1"`
+	APIKey           string  `json:"api_key" validate:"required,min=64"`
+	Description      *string `json:"description"`
+	RegistrationType *string `json:"registration_type"` // "manual" or "auto"
 }
 
 // ManualCheckRequest represents a request for manual site checks
@@ -158,6 +159,21 @@ type MonitorResultRequest struct {
 	ErrorMessage *string                `json:"error_message"`
 	Metadata     map[string]interface{} `json:"metadata"`
 	CheckedAt    time.Time              `json:"checked_at"`
+}
+
+// AgentKeyUpgradeRequest represents a request to upgrade an agent's key
+type AgentKeyUpgradeRequest struct {
+	AgentID     string `json:"agent_id" validate:"required"`
+	CurrentKey  string `json:"current_key" validate:"required"`
+	RequestedBy string `json:"requested_by"` // "agent" or "manual"
+}
+
+// AgentKeyUpgradeResponse represents the response to a key upgrade request
+type AgentKeyUpgradeResponse struct {
+	Success       bool   `json:"success"`
+	NewAPIKey     string `json:"new_api_key,omitempty"`
+	Message       string `json:"message"`
+	RestartNeeded bool   `json:"restart_needed"`
 }
 
 // Validate validates a SiteCreateRequest

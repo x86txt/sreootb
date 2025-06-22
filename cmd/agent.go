@@ -1,14 +1,11 @@
 package cmd
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -76,21 +73,9 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		log.Fatal().Err(err).Msg("Failed to create agent")
 	}
 
-	// Setup graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-		<-sigChan
-		log.Info().Msg("Shutdown signal received")
-		cancel()
-	}()
-
-	// Start agent
+	// Start agent - the agent now handles shutdown signals internally
 	log.Info().Str("server_url", cfg.Agent.ServerURL).Msg("Starting SREootb agent")
-	return agentInstance.Start(ctx)
+	return agentInstance.Start()
 }
 
 func generateAgentConfig() error {

@@ -6,13 +6,17 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -151,41 +155,195 @@ func New(cfg *config.Config) (*Agent, error) {
 }
 
 // Start starts the agent
-func (a *Agent) Start(ctx context.Context) error {
+func (a *Agent) Start() error {
 	log.Info().
-		Str("server_url", a.httpURL).
-		Str("websocket_url", a.wsURL).
+		Str("server_url", a.config.Agent.ServerURL).
 		Str("agent_id", a.config.Agent.AgentID).
 		Msg("Starting SREootb agent")
 
-	// Start monitoring task management
+	// Check if we're using a bootstrap key and request upgrade
+	if err := a.checkAndUpgradeKey(); err != nil {
+		log.Error().Err(err).Msg("Failed to check/upgrade API key")
+		// Continue with existing key if upgrade fails
+	}
+
+	// Start monitoring engine in background
 	go a.startMonitoringEngine()
+
+	// Start result processor
 	go a.startResultSubmitter()
 
-	// Try WebSocket connection first
-	if err := a.connectWebSocket(); err != nil {
-		log.Warn().Err(err).Msg("WebSocket connection failed, falling back to HTTP polling")
-		a.useWebSocket = false
-
-		// Test HTTP connection as fallback
-		if err := a.testConnection(); err != nil {
-			return fmt.Errorf("failed to connect to server via HTTP: %w", err)
-		}
-		log.Info().Msg("Successfully connected to server via HTTP")
-	} else {
-		log.Info().Msg("Successfully connected to server via WebSocket")
-	}
-
-	// Start health endpoint
+	// Start health server
 	go a.startHealthServer()
 
+	// Try WebSocket connection first
 	if a.useWebSocket {
-		// WebSocket mode - handle connection
-		return a.handleWebSocketConnection(ctx)
-	} else {
-		// HTTP polling mode - legacy fallback
+		if err := a.connectWebSocket(); err != nil {
+			log.Error().Err(err).Msg("Failed to establish WebSocket connection, falling back to HTTP")
+			a.useWebSocket = false
+		}
+	}
+
+	// If WebSocket failed, fall back to HTTP
+	if !a.useWebSocket {
+		log.Info().Msg("Using HTTP fallback mode")
+		// Create a context for HTTP polling
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		return a.handleHTTPPolling(ctx)
 	}
+
+	// Handle WebSocket connection
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		log.Info().Msg("Received shutdown signal")
+		cancel()
+	}()
+
+	return a.handleWebSocketConnection(ctx)
+}
+
+// checkAndUpgradeKey checks if we're using a bootstrap key and requests an upgrade
+func (a *Agent) checkAndUpgradeKey() error {
+	// Check if this looks like a shared/bootstrap key (shared keys are usually the server's default key)
+	// We can detect this by attempting an upgrade - if it succeeds, it was a bootstrap key
+	if len(a.config.Agent.APIKey) == 64 { // Standard key length
+		log.Info().Msg("🔄 Checking if API key can be upgraded from bootstrap to permanent...")
+
+		if err := a.requestKeyUpgrade(); err != nil {
+			// If upgrade fails, it's likely already a permanent key or there's an error
+			log.Debug().Err(err).Msg("Key upgrade not needed or failed - continuing with current key")
+			return nil
+		}
+	}
+
+	return nil
+}
+
+// requestKeyUpgrade requests a key upgrade from the server
+func (a *Agent) requestKeyUpgrade() error {
+	upgradeReq := models.AgentKeyUpgradeRequest{
+		AgentID:     a.config.Agent.AgentID,
+		CurrentKey:  a.config.Agent.APIKey,
+		RequestedBy: "agent",
+	}
+
+	reqData, err := json.Marshal(upgradeReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal upgrade request: %w", err)
+	}
+
+	// Make HTTP request to upgrade endpoint
+	req, err := http.NewRequest("POST", a.httpURL+"/api/agents/upgrade-key", bytes.NewBuffer(reqData))
+	if err != nil {
+		return fmt.Errorf("failed to create upgrade request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", a.config.Agent.APIKey)
+	req.Header.Set("X-Agent-ID", a.config.Agent.AgentID)
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to make upgrade request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upgrade request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var upgradeResp models.AgentKeyUpgradeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&upgradeResp); err != nil {
+		return fmt.Errorf("failed to decode upgrade response: %w", err)
+	}
+
+	if !upgradeResp.Success {
+		return fmt.Errorf("upgrade failed: %s", upgradeResp.Message)
+	}
+
+	log.Info().
+		Str("old_key", a.config.Agent.APIKey[:8]+"...").
+		Str("new_key", upgradeResp.NewAPIKey[:8]+"...").
+		Msg("🔑 Successfully upgraded from bootstrap to permanent API key")
+
+	// Save the new permanent key and restart
+	if upgradeResp.RestartNeeded {
+		return a.restartWithNewKey(upgradeResp.NewAPIKey)
+	}
+
+	return nil
+}
+
+// restartWithNewKey saves the new API key and restarts the agent process
+func (a *Agent) restartWithNewKey(newAPIKey string) error {
+	log.Info().
+		Str("new_key", newAPIKey[:8]+"...").
+		Msg("🔄 Restarting agent with permanent API key...")
+
+	// Get current command line arguments
+	args := os.Args[1:] // Exclude program name
+
+	// Update the API key in the arguments
+	newArgs := make([]string, 0, len(args))
+	keyUpdated := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--api-key" && i+1 < len(args) {
+			// Replace the API key
+			newArgs = append(newArgs, arg)
+			newArgs = append(newArgs, newAPIKey)
+			i++ // Skip the old key
+			keyUpdated = true
+		} else if strings.HasPrefix(arg, "--api-key=") {
+			// Replace the API key in --api-key=value format
+			newArgs = append(newArgs, "--api-key="+newAPIKey)
+			keyUpdated = true
+		} else {
+			newArgs = append(newArgs, arg)
+		}
+	}
+
+	if !keyUpdated {
+		// If --api-key wasn't found, add it
+		newArgs = append(newArgs, "--api-key", newAPIKey)
+	}
+
+	// Log the restart command (with key redacted)
+	redactedArgs := make([]string, len(newArgs))
+	copy(redactedArgs, newArgs)
+	for i, arg := range redactedArgs {
+		if arg == newAPIKey {
+			redactedArgs[i] = newAPIKey[:8] + "..."
+		} else if strings.HasPrefix(arg, "--api-key=") && len(arg) > 20 {
+			redactedArgs[i] = "--api-key=" + newAPIKey[:8] + "..."
+		}
+	}
+
+	log.Info().
+		Str("command", os.Args[0]).
+		Strs("args", redactedArgs).
+		Msg("🚀 Restarting with new permanent API key")
+
+	// Stop current agent gracefully by closing stopChan
+	close(a.stopChan)
+
+	// Start new process
+	if err := syscall.Exec(os.Args[0], append([]string{os.Args[0]}, newArgs...), os.Environ()); err != nil {
+		return fmt.Errorf("failed to restart agent process: %w", err)
+	}
+
+	// This line should never be reached if exec succeeds
+	return nil
 }
 
 // connectWebSocket establishes a WebSocket connection to the server

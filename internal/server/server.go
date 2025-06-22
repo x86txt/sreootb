@@ -71,7 +71,7 @@ type Server struct {
 
 // generateSecureAPIKey generates a cryptographically secure API key
 func generateSecureAPIKey() (string, error) {
-	bytes := make([]byte, 32) // 32 bytes = 64 hex characters
+	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
@@ -429,6 +429,7 @@ func (s *Server) setupWebRouter() {
 			r.Post("/", s.handleCreateAgent)
 			r.Delete("/{id}", s.handleDeleteAgent)
 			r.Get("/api-key", s.handleGetAgentAPIKey)
+			r.Post("/upgrade-key", s.handleUpgradeAgentKey)
 		})
 
 		// Monitoring
@@ -2199,4 +2200,67 @@ func extractRemoteIP(r *http.Request) string {
 		return r.RemoteAddr // Return as-is if we can't split
 	}
 	return host
+}
+
+func (s *Server) handleUpgradeAgentKey(w http.ResponseWriter, r *http.Request) {
+	var req models.AgentKeyUpgradeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if req.AgentID == "" || req.CurrentKey == "" {
+		http.Error(w, "Agent ID and current key are required", http.StatusBadRequest)
+		return
+	}
+
+	// Hash the current key to check if it's a bootstrap key
+	currentKeyHash := utils.HashAPIKey(req.CurrentKey)
+
+	// Check if this is actually a bootstrap key
+	isBootstrap, err := s.db.IsBootstrapKey(currentKeyHash)
+	if err != nil {
+		log.Error().Err(err).Str("key_hash", currentKeyHash).Msg("Failed to check if key is bootstrap")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if !isBootstrap {
+		http.Error(w, "Only bootstrap keys can be upgraded", http.StatusBadRequest)
+		return
+	}
+
+	// Generate a new permanent API key
+	newAPIKey, err := generateSecureAPIKey()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to generate new API key")
+		http.Error(w, "Failed to generate new API key", http.StatusInternalServerError)
+		return
+	}
+
+	newKeyHash := utils.HashAPIKey(newAPIKey)
+
+	// Upgrade the key in the database
+	if err := s.db.UpgradeAgentKey(currentKeyHash, newKeyHash); err != nil {
+		log.Error().Err(err).Str("current_key_hash", currentKeyHash).Msg("Failed to upgrade agent key")
+		http.Error(w, "Failed to upgrade agent key", http.StatusInternalServerError)
+		return
+	}
+
+	log.Info().
+		Str("agent_id", req.AgentID).
+		Str("current_key_hash", currentKeyHash[:8]+"...").
+		Str("new_key_hash", newKeyHash[:8]+"...").
+		Msg("Successfully upgraded agent key from bootstrap to permanent")
+
+	// Return the new key
+	response := models.AgentKeyUpgradeResponse{
+		Success:       true,
+		NewAPIKey:     newAPIKey,
+		Message:       "Key upgraded successfully from bootstrap to permanent",
+		RestartNeeded: true,
+	}
+
+	s.writeJSON(w, response)
 }

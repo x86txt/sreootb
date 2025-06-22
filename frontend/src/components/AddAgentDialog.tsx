@@ -13,12 +13,19 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Plus, AlertCircle, CheckCircle, Copy, Eye, EyeOff, Info } from "lucide-react"
+import { Plus, AlertCircle, CheckCircle, Copy, Eye, EyeOff, Info, RefreshCw, Users, UserPlus } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 
 interface AddAgentDialogProps {
   onAgentAdded?: () => void
 }
+
+// Generate a cryptographically secure API key
+const generateSecureAPIKey = (): string => {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+};
 
 export function AddAgentDialog({ onAgentAdded }: AddAgentDialogProps) {
   const [open, setOpen] = useState(false)
@@ -28,32 +35,40 @@ export function AddAgentDialog({ onAgentAdded }: AddAgentDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
-  const [serverAPIKey, setServerAPIKey] = useState<string>("")
+  const [bootstrapAPIKey, setBootstrapAPIKey] = useState<string>("")
   const [serverURL, setServerURL] = useState<string>("")
   const [agentPort, setAgentPort] = useState<string>("8081")
   const [showAPIKey, setShowAPIKey] = useState(false)
-  const [showServerKey, setShowServerKey] = useState(false)
+  const [showBootstrapKey, setShowBootstrapKey] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [useServerKey, setUseServerKey] = useState(true)
+  const [registrationType, setRegistrationType] = useState<'manual' | 'auto'>('manual')
   const { isAuthenticated } = useAuth()
 
-  // Fetch server's agent API key when dialog opens
+  // Generate a unique API key when dialog opens for manual registration
   useEffect(() => {
     if (open && isAuthenticated) {
-      fetchServerAPIKey()
+      if (registrationType === 'manual') {
+        // Generate new unique key for manual registration
+        const newKey = generateSecureAPIKey();
+        setApiKey(newKey);
+      }
+      fetchServerInfo();
     }
-  }, [open, isAuthenticated])
+  }, [open, isAuthenticated, registrationType])
 
-  const fetchServerAPIKey = async () => {
+  const fetchServerInfo = async () => {
     try {
       const response = await fetch("/api/agents/api-key")
       if (response.ok) {
         const data = await response.json()
-        setServerAPIKey(data.api_key)
+        setBootstrapAPIKey(data.api_key)
         setServerURL(data.server_url || 'https://your-server')
         setAgentPort(data.agent_port || '8081')
-        // Pre-fill the API key field with server key by default
-        setApiKey(data.api_key)
+        
+        // For auto-registration, use bootstrap key
+        if (registrationType === 'auto') {
+          setApiKey(data.api_key)
+        }
       }
     } catch (err) {
       console.error("Failed to fetch server agent API key:", err)
@@ -70,14 +85,18 @@ export function AddAgentDialog({ onAgentAdded }: AddAgentDialogProps) {
     }
   }
 
-  const handleUseServerKey = () => {
-    setUseServerKey(true)
-    setApiKey(serverAPIKey)
+  const generateNewKey = () => {
+    const newKey = generateSecureAPIKey();
+    setApiKey(newKey);
   }
 
-  const handleUseCustomKey = () => {
-    setUseServerKey(false)
-    setApiKey("")
+  const handleRegistrationTypeChange = (type: 'manual' | 'auto') => {
+    setRegistrationType(type)
+    if (type === 'manual') {
+      generateNewKey()
+    } else {
+      setApiKey(bootstrapAPIKey)
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -95,6 +114,7 @@ export function AddAgentDialog({ onAgentAdded }: AddAgentDialogProps) {
           name: name.trim(),
           api_key: apiKey.trim(),
           description: description.trim() || null,
+          registration_type: registrationType,
         }),
       })
 
@@ -123,9 +143,9 @@ export function AddAgentDialog({ onAgentAdded }: AddAgentDialogProps) {
     setError(null)
     setSuccess(false)
     setShowAPIKey(false)
-    setShowServerKey(false)
+    setShowBootstrapKey(false)
     setCopied(false)
-    setUseServerKey(true)
+    setRegistrationType('manual')
   }
 
   const handleOpenChange = (newOpen: boolean) => {
@@ -148,11 +168,11 @@ export function AddAgentDialog({ onAgentAdded }: AddAgentDialogProps) {
           Add Agent
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent className="sm:max-w-[700px]">
         <DialogHeader>
           <DialogTitle>Add New Agent</DialogTitle>
           <DialogDescription>
-            Register a new monitoring agent with the system. You can use the server's shared API key or provide a custom one.
+            Choose between manual registration with a unique key or auto-registration with the bootstrap key.
           </DialogDescription>
         </DialogHeader>
 
@@ -161,88 +181,74 @@ export function AddAgentDialog({ onAgentAdded }: AddAgentDialogProps) {
             <div className="text-center">
               <CheckCircle className="mx-auto h-12 w-12 text-green-500" />
               <p className="mt-2 text-sm text-muted-foreground">Agent registered successfully!</p>
+              {registrationType === 'manual' && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Use the generated API key to connect your agent.
+                </p>
+              )}
             </div>
           </div>
         ) : (
           <form onSubmit={handleSubmit}>
             <div className="grid gap-4 py-4">
-              {/* Server API Key Reference */}
+              {/* Registration Type Selection */}
               <div className="grid gap-2">
-                <Label>Server's Agent API Key</Label>
-                <div className="flex items-center space-x-2">
-                  <Input
-                    type={showServerKey ? "text" : "password"}
-                    value={serverAPIKey}
-                    readOnly
-                    className="font-mono text-sm bg-muted"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowServerKey(!showServerKey)}
-                  >
-                    {showServerKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => copyToClipboard(serverAPIKey)}
-                  >
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                </div>
-                {copied && (
-                  <p className="text-xs text-green-600">✓ Copied to clipboard!</p>
-                )}
-                <div className="flex items-start gap-2 p-3 bg-muted/50 rounded-md border">
-                  <Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
-                  <div className="text-xs text-foreground">
-                    <p className="font-medium mb-1">Agent Command:</p>
-                    <code className="bg-muted px-2 py-1 rounded text-xs block font-mono">
-                      ./sreootb agent --agent-id "your-agent-name" --api-key "{serverAPIKey}" --server-url "{serverURL.replace(/:\d+$/, '')}:{agentPort}"
-                    </code>
-                  </div>
-                </div>
-              </div>
-
-              {/* API Key Selection */}
-              <div className="grid gap-2">
-                <Label>API Key Configuration</Label>
+                <Label>Registration Type</Label>
                 <div className="flex gap-2">
                   <Button
                     type="button"
-                    variant={useServerKey ? "default" : "outline"}
+                    variant={registrationType === 'manual' ? "default" : "outline"}
                     size="sm"
-                    onClick={handleUseServerKey}
+                    onClick={() => handleRegistrationTypeChange('manual')}
+                    className="flex items-center gap-2"
                   >
-                    Use Server Key
+                    <UserPlus className="h-4 w-4" />
+                    Manual Registration
                   </Button>
                   <Button
                     type="button"
-                    variant={!useServerKey ? "default" : "outline"}
+                    variant={registrationType === 'auto' ? "default" : "outline"}
                     size="sm"
-                    onClick={handleUseCustomKey}
+                    onClick={() => handleRegistrationTypeChange('auto')}
+                    className="flex items-center gap-2"
                   >
-                    Custom Key
+                    <Users className="h-4 w-4" />
+                    Auto-Registration
                   </Button>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  {registrationType === 'manual' 
+                    ? "Generate a unique API key for this specific agent. Most secure option." 
+                    : "Use the shared bootstrap key for agent auto-registration. Agents will upgrade to permanent keys automatically."
+                  }
+                </p>
               </div>
 
-              {/* Agent API Key Input */}
+              {/* Agent API Key */}
               <div className="grid gap-2">
-                <Label htmlFor="apiKey">Agent API Key</Label>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="apiKey">
+                    {registrationType === 'manual' ? 'Unique Agent API Key' : 'Bootstrap API Key'}
+                  </Label>
+                  {registrationType === 'manual' && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={generateNewKey}
+                      className="h-6 px-2"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                    </Button>
+                  )}
+                </div>
                 <div className="flex items-center space-x-2">
                   <Input
                     id="apiKey"
                     type={showAPIKey ? "text" : "password"}
-                    placeholder={useServerKey ? "Using server's API key" : "Enter custom API key (min 64 characters)"}
                     value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    required
-                    className="font-mono text-sm"
-                    readOnly={useServerKey}
+                    readOnly
+                    className="font-mono text-sm bg-muted"
                   />
                   <Button
                     type="button"
@@ -252,14 +258,69 @@ export function AddAgentDialog({ onAgentAdded }: AddAgentDialogProps) {
                   >
                     {showAPIKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => copyToClipboard(apiKey)}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  {useServerKey 
-                    ? "Using the server's shared API key. All agents with this key can connect to the server."
-                    : "Enter a custom API key (minimum 64 characters). This allows for agent-specific authentication."
-                  }
-                </p>
+                {copied && (
+                  <p className="text-xs text-green-600">✓ Copied to clipboard!</p>
+                )}
               </div>
+
+              {/* Agent Command */}
+              <div className="grid gap-2">
+                <Label>Agent Command</Label>
+                <div className="flex items-start gap-2 p-3 bg-muted/50 rounded-md border">
+                  <Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-foreground">
+                    <p className="font-medium mb-1">
+                      {registrationType === 'manual' 
+                        ? 'Start your agent with this unique key:' 
+                        : 'Start your agent with the bootstrap key (will auto-upgrade):'
+                      }
+                    </p>
+                    <code className="bg-muted px-2 py-1 rounded text-xs block font-mono break-all">
+                      ./sreootb agent --agent-id "{name || 'your-agent-name'}" --api-key "{apiKey}" --server-url "{serverURL.replace(/:\d+$/, '')}:{agentPort}"
+                    </code>
+                    {registrationType === 'auto' && (
+                      <p className="text-muted-foreground mt-2 text-xs">
+                        💡 The agent will automatically negotiate a permanent key and restart with it.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Bootstrap Key Reference (only show in auto mode) */}
+              {registrationType === 'auto' && bootstrapAPIKey && (
+                <div className="grid gap-2">
+                  <Label>Bootstrap Key Reference</Label>
+                  <div className="flex items-center space-x-2">
+                    <Input
+                      type={showBootstrapKey ? "text" : "password"}
+                      value={bootstrapAPIKey}
+                      readOnly
+                      className="font-mono text-sm bg-muted/30"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowBootstrapKey(!showBootstrapKey)}
+                    >
+                      {showBootstrapKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    This is the server's shared bootstrap key. Agents using this key will automatically upgrade to permanent keys.
+                  </p>
+                </div>
+              )}
 
               <div className="grid gap-2">
                 <Label htmlFor="name">Agent Name</Label>
@@ -300,7 +361,7 @@ export function AddAgentDialog({ onAgentAdded }: AddAgentDialogProps) {
                 Cancel
               </Button>
               <Button type="submit" disabled={isSubmitting || !name.trim() || !apiKey.trim()}>
-                {isSubmitting ? "Registering..." : "Register Agent"}
+                {isSubmitting ? "Registering..." : `Register ${registrationType === 'manual' ? 'Unique' : 'Bootstrap'} Agent`}
               </Button>
             </DialogFooter>
           </form>

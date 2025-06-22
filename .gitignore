@@ -1,0 +1,136 @@
+# =============================================================================
+# SREootb - Compiled binaries and build artifacts
+# =============================================================================
+
+# Compiled binaries - organized in built/ subdirectory
+built/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# =============================================================================
+# Database files - organized in db/ subdirectory 
+# =============================================================================
+
+# SQLite databases and related files
+db/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# =============================================================================
+# Configuration and sensitive files
+# =============================================================================
+
+# Configuration files with sensitive data
+*.yaml
+*.yml
+!*.example.yaml
+!*.example.yml
+!.github/workflows/*.yml
+!.github/workflows/*.yaml
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+certs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# =============================================================================
+# Development and IDE files
+# =============================================================================
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# System and OS files
+# =============================================================================
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# =============================================================================
+# Logs and temporary files
+# =============================================================================
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Runtime files
+*.pid
+
+# =============================================================================
+# Frontend and web build artifacts
+# =============================================================================
+
+# Web build artifacts (Next.js specific)
+web/
+.next/
+node_modules/
+
+# Frontend build output - keep placeholder structure for Go embed
+/frontend/dist/*
+!/frontend/dist/index.html
+!/frontend/dist/_next/
+!/frontend/dist/_next/static/
+!/frontend/dist/_next/static/.gitkeep
+
+# =============================================================================
+# Test coverage and packaging
+# =============================================================================
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Package files
+*.tar.gz
+*.zip
+*.tar
+*.dmg
+*.pkg
+
+# Backup files
+*.bak
+*.backup 

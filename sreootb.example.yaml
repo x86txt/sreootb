@@ -1,41 +1,37 @@
-# SRE: Out of the Box (SREootb) Configuration
-# This is an example configuration file
+# SRE: Out of the Box (SREootb) Server Configuration
 
 # Logging configuration
 log:
   level: "info"          # trace, debug, info, warn, error
   format: "console"      # console, json
 
-# Server configuration (when running in server mode)
+# Server configuration
 server:
   # Web GUI server configuration
   bind: "0.0.0.0:8080"              # Web GUI bind address
-  tls_cert: ""                      # Path to TLS certificate for web GUI (optional)
-  tls_key: ""                       # Path to TLS private key for web GUI (optional)
-  http3: false                      # HTTP/3 for web GUI (optional, requires TLS)
+  tls_cert: ""                      # Path to TLS certificate for web GUI (leave empty for auto-TLS)
+  tls_key: ""                       # Path to TLS private key for web GUI (leave empty for auto-TLS)
   
-  # Agent API server configuration (separate port for better performance)
-  agent_bind: "0.0.0.0:8443"        # Agent API bind address (WebTransport over HTTP/3)
+  # Agent API server configuration
+  agent_bind: "0.0.0.0:8081"        # Agent API bind address (WebSocket/HTTP)
   agent_tls_cert: ""                # Separate TLS cert for agent API (falls back to tls_cert)
   agent_tls_key: ""                 # Separate TLS key for agent API (falls back to tls_key)
-  agent_http3: true                 # Force HTTP/3 for agents (recommended)
-  webtransport: true                # Enable WebTransport for agents (recommended)
+  
+  # TLS Configuration
+  auto_tls: true                    # Enable automatic ed25519 TLS certificate generation
+                                    # Certificates will be stored in ./certs/ directory
+                                    # Includes proper DNS Alt Names for browser compatibility
+  
+  # Authentication
+  admin_api_key: "change-me-in-production"    # Admin API key for web GUI access
+  
+  # Database and storage
+  db_path: "./db/sreootb.db"         # SQLite database path (organized in db/ subdirectory)
   
   # General server settings
-  db_path: "./sreootb.db"            # SQLite database path
-  auto_tls: true                    # Enable automatic ECDSA P-256 TLS certificate generation
-                                    # Certificates stored in ./certs/ with proper DNS Alt Names
   min_scan_interval: "10s"          # Minimum allowed scan interval
   max_scan_interval: "24h"          # Maximum allowed scan interval
   dev_mode: false                   # Development mode
 
-# Agent configuration (when running in agent mode)
-agent:
-  server_url: "https://your-server.com:8443"  # SREootb agent API URL (agent port)
-  api_key: ""                                  # Agent API key (64+ characters)
-  agent_id: ""                                 # Unique agent identifier (defaults to hostname)
-  check_interval: "30s"                       # How often to check in with server
-  bind: "127.0.0.1:8081"                      # Health endpoint bind address
-  user_agent: "SREootb-Agent/2.0"              # User agent for HTTP requests
-  use_webtransport: true                       # Use WebTransport over HTTP/3 (recommended)
-  fallback_http2: true                         # Fall back to HTTP/2 if WebTransport fails 
+# Agent configuration is not needed for server mode
+# Use 'sreootb agent --gen-config' to generate agent configuration 
