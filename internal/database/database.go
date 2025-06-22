@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
@@ -793,4 +795,163 @@ func (db *DB) GetLatestMonitorResults() ([]*models.MonitorResult, error) {
 	}
 
 	return results, nil
+}
+
+// GetAnalyticsData returns time-series monitoring data for analytics
+func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinutes int) (map[string]interface{}, error) {
+	var query string
+	var args []interface{}
+
+	// Build the query using site_checks table instead of monitor_results
+	if len(siteIDs) > 0 {
+		placeholders := make([]string, len(siteIDs))
+		for i, id := range siteIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		query = fmt.Sprintf(`
+			SELECT 
+				sc.site_id,
+				s.name as site_name,
+				s.url as site_url,
+				sc.response_time,
+				sc.status,
+				sc.status_code,
+				sc.checked_at,
+				datetime(
+					(strftime('%%s', sc.checked_at) / (%d * 60)) * (%d * 60),
+					'unixepoch'
+				) as time_bucket
+			FROM site_checks sc
+			JOIN sites s ON sc.site_id = s.id
+			WHERE sc.site_id IN (%s)
+			AND sc.checked_at >= ?
+			ORDER BY sc.checked_at DESC
+		`, intervalMinutes, intervalMinutes, strings.Join(placeholders, ","))
+		args = append(args, startTime)
+	} else {
+		query = fmt.Sprintf(`
+			SELECT 
+				sc.site_id,
+				s.name as site_name,
+				s.url as site_url,
+				sc.response_time,
+				sc.status,
+				sc.status_code,
+				sc.checked_at,
+				datetime(
+					(strftime('%%s', sc.checked_at) / (%d * 60)) * (%d * 60),
+					'unixepoch'
+				) as time_bucket
+			FROM site_checks sc
+			JOIN sites s ON sc.site_id = s.id
+			WHERE sc.checked_at >= ?
+			ORDER BY sc.checked_at DESC
+		`, intervalMinutes, intervalMinutes)
+		args = append(args, startTime)
+	}
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get analytics data: %w", err)
+	}
+	defer rows.Close()
+
+	// Data structures for organizing results
+	siteInfo := make(map[int]map[string]interface{})
+	timeBuckets := make(map[string]map[string]interface{})
+
+	for rows.Next() {
+		var siteID int
+		var siteName, siteURL, status, timeBucket string
+		var responseTime *float64
+		var statusCode *int
+		var checkedAt time.Time
+
+		err := rows.Scan(&siteID, &siteName, &siteURL, &responseTime, &status, &statusCode, &checkedAt, &timeBucket)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan analytics row: %w", err)
+		}
+
+		// Store site information
+		if _, exists := siteInfo[siteID]; !exists {
+			siteInfo[siteID] = map[string]interface{}{
+				"id":                 siteID,
+				"name":               siteName,
+				"url":                siteURL,
+				"last_status":        status,
+				"last_response_time": responseTime,
+				"last_status_code":   statusCode,
+				"last_checked_at":    checkedAt.Format(time.RFC3339),
+			}
+		}
+
+		// Organize data by time buckets
+		if _, exists := timeBuckets[timeBucket]; !exists {
+			timeBuckets[timeBucket] = map[string]interface{}{
+				"timestamp":      time.Unix(0, 0).Add(time.Duration(len(timeBuckets)*intervalMinutes) * time.Minute).Format("15:04"),
+				"full_timestamp": timeBucket,
+			}
+		}
+
+		// Add response time for this site in this time bucket
+		if responseTime != nil && status == "up" {
+			siteKey := fmt.Sprintf("site_%d", siteID)
+
+			// For now, use the latest value in the time bucket (could be averaged)
+			timeBuckets[timeBucket][siteKey] = *responseTime
+		}
+	}
+
+	// Convert time buckets to sorted slice
+	var timestamps []string
+	for timestamp := range timeBuckets {
+		timestamps = append(timestamps, timestamp)
+	}
+
+	// Sort timestamps
+	sort.Strings(timestamps)
+
+	// Build final data points array
+	var dataPoints []map[string]interface{}
+	for _, timestamp := range timestamps {
+		dataPoints = append(dataPoints, timeBuckets[timestamp])
+	}
+
+	// Calculate averages for "all" view
+	for _, point := range dataPoints {
+		var sum float64
+		var count int
+
+		for key, value := range point {
+			if strings.HasPrefix(key, "site_") {
+				if val, ok := value.(float64); ok {
+					sum += val
+					count++
+				}
+			}
+		}
+
+		if count > 0 {
+			point["average"] = sum / float64(count)
+		} else {
+			point["average"] = nil
+		}
+	}
+
+	// Convert site info to slice
+	var sites []map[string]interface{}
+	for _, info := range siteInfo {
+		sites = append(sites, info)
+	}
+
+	// Sort sites by ID for consistency
+	sort.Slice(sites, func(i, j int) bool {
+		return sites[i]["id"].(int) < sites[j]["id"].(int)
+	})
+
+	return map[string]interface{}{
+		"data":  dataPoints,
+		"sites": sites,
+	}, nil
 }

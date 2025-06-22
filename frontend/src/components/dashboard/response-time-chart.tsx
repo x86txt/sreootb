@@ -152,14 +152,14 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
   }, [sites]);
 
   const getDisplayLines = () => {
-    if (!analyticsData) return [];
+    if (!analyticsData || !analyticsData.sites || !Array.isArray(analyticsData.sites)) return [];
     
     const lines = [];
     
     console.log('Building display lines...', { 
       selectedSites, 
       analyticsDataSites: analyticsData.sites,
-      sampleData: analyticsData.data[0] 
+      sampleData: analyticsData.data && analyticsData.data.length > 0 ? analyticsData.data[0] : null
     });
     
     if (selectedSites.includes('all') && analyticsData.sites.length >= 1) {
@@ -396,10 +396,10 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
               <p className="text-sm text-muted-foreground">{error}</p>
             </div>
           </div>
-        ) : !analyticsData?.data.length || !analyticsData.data.some(point => {
+        ) : (!analyticsData?.data || !Array.isArray(analyticsData.data) || analyticsData.data.length === 0 || !analyticsData.data.some(point => {
           const keys = Object.keys(point).filter(k => k.startsWith('site_') || k === 'average');
           return keys.some(k => point[k] !== null);
-        }) ? (
+        })) ? (
           <div className="h-80 flex items-center justify-center">
             <div className="text-center">
               <Activity className="h-12 w-12 text-muted-foreground mx-auto mb-4" />

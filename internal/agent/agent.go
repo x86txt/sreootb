@@ -598,11 +598,19 @@ func (a *Agent) fetchAndUpdateTasks() error {
 
 	// Update tasks
 	a.tasksMutex.Lock()
+	oldTaskCount := len(a.tasks)
 	a.tasks = tasksResponse.Tasks
 	a.tasksMutex.Unlock()
 
 	// Update schedulers
 	a.updateTaskSchedulers(tasksResponse.Tasks)
+
+	// Log initial task summary or individual updates
+	if oldTaskCount == 0 {
+		a.logTaskSummary(tasksResponse.Tasks, true)
+	} else {
+		a.logTaskUpdates(tasksResponse.Tasks, oldTaskCount)
+	}
 
 	log.Debug().Int("task_count", len(tasksResponse.Tasks)).Msg("Updated monitoring tasks")
 	return nil
@@ -996,4 +1004,104 @@ func (a *Agent) handleTaskRemovalMessage(msg map[string]interface{}) {
 	a.tasksMutex.Unlock()
 
 	log.Info().Int("removed_count", len(taskIDsToRemove)).Msg("Removed monitoring tasks via WebSocket")
+}
+
+// logTaskSummary logs a summary of tasks organized by type
+func (a *Agent) logTaskSummary(tasks []models.MonitorTask, isInitial bool) {
+	if len(tasks) == 0 {
+		if isInitial {
+			log.Info().Msg("✅ Agent connected - No monitoring tasks assigned")
+		}
+		return
+	}
+
+	// Count tasks by type
+	taskCounts := make(map[string]int)
+	for _, task := range tasks {
+		taskCounts[task.MonitorType]++
+	}
+
+	// Log the summary
+	logEvent := log.Info()
+	if isInitial {
+		logEvent = logEvent.Str("status", "✅ Agent connected - Received monitoring tasks")
+	} else {
+		logEvent = logEvent.Str("status", "📋 Task summary")
+	}
+
+	logEvent = logEvent.Int("total_tasks", len(tasks))
+
+	// Add counts for each type
+	for taskType, count := range taskCounts {
+		switch taskType {
+		case "http":
+			logEvent = logEvent.Int("http_resources", count)
+		case "https":
+			logEvent = logEvent.Int("https_resources", count)
+		case "ping":
+			logEvent = logEvent.Int("ping_targets", count)
+		case "tcp":
+			logEvent = logEvent.Int("tcp_services", count)
+		default:
+			logEvent = logEvent.Int(fmt.Sprintf("%s_resources", taskType), count)
+		}
+	}
+
+	logEvent.Msg("Monitoring task distribution")
+
+	// Log individual tasks with emoji indicators
+	for _, task := range tasks {
+		emoji := "🌐"
+		switch task.MonitorType {
+		case "http":
+			emoji = "🌐"
+		case "https":
+			emoji = "🔒"
+		case "ping":
+			emoji = "📡"
+		case "tcp":
+			emoji = "🔌"
+		}
+
+		log.Info().
+			Str("emoji", emoji).
+			Str("type", task.MonitorType).
+			Str("url", task.URL).
+			Str("interval", task.Interval).
+			Int("task_id", task.ID).
+			Msgf("Monitoring: %s", task.URL)
+	}
+}
+
+// logTaskUpdates logs individual task updates
+func (a *Agent) logTaskUpdates(newTasks []models.MonitorTask, oldTaskCount int) {
+	newTaskCount := len(newTasks)
+
+	if newTaskCount > oldTaskCount {
+		added := newTaskCount - oldTaskCount
+		log.Info().
+			Str("status", "📈 New tasks added").
+			Int("added_count", added).
+			Int("total_tasks", newTaskCount).
+			Msg("Monitoring tasks updated")
+
+		// For simplicity, just log the new total summary
+		a.logTaskSummary(newTasks, false)
+	} else if newTaskCount < oldTaskCount {
+		removed := oldTaskCount - newTaskCount
+		log.Info().
+			Str("status", "📉 Tasks removed").
+			Int("removed_count", removed).
+			Int("total_tasks", newTaskCount).
+			Msg("Monitoring tasks updated")
+
+		if newTaskCount > 0 {
+			a.logTaskSummary(newTasks, false)
+		}
+	} else {
+		log.Info().
+			Str("status", "🔄 Tasks updated").
+			Int("total_tasks", newTaskCount).
+			Msg("Monitoring task configuration changed")
+	}
 }

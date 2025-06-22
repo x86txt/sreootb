@@ -711,8 +711,29 @@ func (s *Server) handleCreateSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Async refresh monitoring
+	// Immediately broadcast new tasks to connected agents
 	go func() {
+		// Get the new monitoring tasks for this site
+		tasks, err := s.db.GetTasksForAgent(0) // Get all tasks
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to get tasks after adding site")
+			return
+		}
+
+		// Find tasks for this site and broadcast them
+		for _, task := range tasks {
+			if task.SiteID == site.ID {
+				log.Info().
+					Int("site_id", site.ID).
+					Int("task_id", task.ID).
+					Str("monitor_type", task.MonitorType).
+					Str("url", task.URL).
+					Msg("📈 Broadcasting new monitoring task to agents")
+				s.broadcastTaskToAgents(task)
+			}
+		}
+
+		// Also refresh monitoring for traditional polling
 		if err := s.monitor.RefreshMonitoring(); err != nil {
 			log.Error().Err(err).Msg("Failed to refresh monitoring after adding site")
 		}
@@ -1011,10 +1032,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetSitesAnalytics(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters
 	hoursStr := r.URL.Query().Get("hours")
-	hours := 1
+	hoursFloat := 1.0
 	if hoursStr != "" {
-		if h, err := strconv.Atoi(hoursStr); err == nil && h > 0 && h <= 168 {
-			hours = h
+		if h, err := strconv.ParseFloat(hoursStr, 64); err == nil && h > 0 && h <= 168 {
+			hoursFloat = h
 		}
 	}
 
@@ -1036,81 +1057,26 @@ func (s *Server) handleGetSitesAnalytics(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// Get sites
-	sites, err := s.db.GetSiteStatus()
+	// Calculate start time
+	now := time.Now()
+	startTime := now.Add(-time.Duration(hoursFloat * float64(time.Hour)))
+
+	// Get analytics data from database
+	analyticsData, err := s.db.GetAnalyticsData(siteIDs, startTime, intervalMinutes)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Error().Err(err).Msg("Failed to get analytics data")
+		http.Error(w, "Failed to get analytics data", http.StatusInternalServerError)
 		return
 	}
 
-	// Filter sites if specific IDs requested
-	var filteredSites []*models.SiteStatus
-	if len(siteIDs) > 0 {
-		siteIDMap := make(map[int]bool)
-		for _, id := range siteIDs {
-			siteIDMap[id] = true
-		}
-		for _, site := range sites {
-			if siteIDMap[site.ID] {
-				filteredSites = append(filteredSites, site)
-			}
-		}
-	} else {
-		filteredSites = sites
+	// Add time range information
+	analyticsData["time_range"] = map[string]interface{}{
+		"start": startTime.Format(time.RFC3339),
+		"end":   now.Format(time.RFC3339),
+		"hours": hoursFloat,
 	}
 
-	// Build analytics response
-	now := time.Now()
-	startTime := now.Add(-time.Duration(hours) * time.Hour)
-
-	// Generate time series data points
-	dataPoints := []map[string]interface{}{}
-	for t := startTime; t.Before(now); t = t.Add(time.Duration(intervalMinutes) * time.Minute) {
-		point := map[string]interface{}{
-			"timestamp":      t.Format("15:04"),
-			"full_timestamp": t.Format(time.RFC3339),
-		}
-
-		// Add placeholder data for each site
-		for _, site := range filteredSites {
-			key := fmt.Sprintf("site_%d", site.ID)
-			if site.ResponseTime != nil {
-				point[key] = *site.ResponseTime
-			} else {
-				point[key] = nil
-			}
-		}
-
-		dataPoints = append(dataPoints, point)
-	}
-
-	// Build site info
-	siteInfo := []map[string]interface{}{}
-	for _, site := range filteredSites {
-		info := map[string]interface{}{
-			"id":                 site.ID,
-			"name":               site.Name,
-			"url":                site.URL,
-			"last_status":        site.Status,
-			"last_response_time": site.ResponseTime,
-			"last_status_code":   site.StatusCode,
-			"last_checked_at":    site.CheckedAt,
-			"scan_interval":      site.ScanInterval,
-		}
-		siteInfo = append(siteInfo, info)
-	}
-
-	response := map[string]interface{}{
-		"data":  dataPoints,
-		"sites": siteInfo,
-		"time_range": map[string]interface{}{
-			"start": startTime.Format(time.RFC3339),
-			"end":   now.Format(time.RFC3339),
-			"hours": hours,
-		},
-	}
-
-	s.writeJSON(w, response)
+	s.writeJSON(w, analyticsData)
 }
 
 // handleAuthLogin handles admin authentication

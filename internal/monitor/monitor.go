@@ -232,9 +232,16 @@ func (m *Monitor) checkSite(site *models.Site) models.SiteCheck {
 	if strings.HasPrefix(site.URL, "ping://") {
 		// Ping check
 		host := site.URL[7:] // Remove 'ping://'
+		start := time.Now()
 		if m.pingHost(host) {
+			duration := time.Since(start)
+			responseTime := duration.Seconds()
+			check.ResponseTime = &responseTime
 			check.Status = "up"
 		} else {
+			duration := time.Since(start)
+			responseTime := duration.Seconds()
+			check.ResponseTime = &responseTime
 			check.Status = "down"
 			errorMsg := "ping failed"
 			check.ErrorMessage = &errorMsg
