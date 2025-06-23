@@ -108,6 +108,7 @@ temp/
 web/
 .next/
 node_modules/
+builds/
 
 # Frontend build output - keep placeholder structure for Go embed
 /frontend/dist/*

@@ -25,22 +25,18 @@ server:
   # Database Configuration
   database:
     # Database type: "sqlite" or "cockroachdb"
-    type: "sqlite"
-    
-    # SQLite configuration (used when type = "sqlite")
-    sqlite_path: "./db/sreootb.db"   # SQLite database file path
+    type: "cockroachdb"
     
     # CockroachDB configuration (used when type = "cockroachdb")
-    # Uncomment and configure for CockroachDB cluster deployment
-    # host: "localhost"              # CockroachDB cluster host
-    # port: 26257                    # CockroachDB port (default: 26257)
-    # database: "sreootb"            # Database name
-    # user: "sreootb_user"           # Database user
-    # password: "secure_password"    # Database password
-    # ssl_mode: "require"            # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
-    # ssl_root_cert: ""              # Path to SSL root certificate file
-    # ssl_cert: ""                   # Path to SSL client certificate file  
-    # ssl_key: ""                    # Path to SSL client key file
+    host: "10.28.0.4"                # Use any node's private IP or hostname
+    port: 26257
+    database: "sreootb"
+    user: "sreootb_user"
+    password: "your_secure_password_here"
+    ssl_mode: "require"
+    ssl_root_cert: "/opt/cockroach-certs/ca.crt"
+    ssl_cert: "/opt/cockroach-certs/client.sreootb_user.crt"
+    ssl_key: "/opt/cockroach-certs/client.sreootb_user.key"
     
     # Connection pool settings (for CockroachDB)
     max_open_conns: 25               # Maximum open connections
@@ -49,7 +45,7 @@ server:
     conn_max_idle_time: "60s"        # Connection maximum idle time
   
   # Authentication
-  admin_api_key: "change-me-in-production"    # Admin API key for web GUI access
+  admin_api_key: "your_generated_admin_key_here"    # Admin API key for web GUI access
   
   # General server settings
   min_scan_interval: "10s"          # Minimum allowed scan interval
