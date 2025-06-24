@@ -16,7 +16,12 @@ var rootCmd = &cobra.Command{
 	Short: "SRE: Out of the Box monitoring solution",
 	Long: `SRE: Out of the Box (SREootb) is a comprehensive website monitoring 
 and alerting solution that provides both server and agent functionality
-in a single binary.`,
+in a single binary.
+
+Available modes:
+  standalone  - Run server + local agent in single process (recommended for simple deployments)
+  server      - Run monitoring server only
+  agent       - Run monitoring agent only`,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Check for global version flag when no subcommand is provided
 		if versionFlag, _ := cmd.Flags().GetBool("version"); versionFlag {

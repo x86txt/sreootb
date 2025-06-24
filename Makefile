@@ -1,7 +1,7 @@
 # SREootb Makefile
 # Organized build system with proper directory structure
 
-.PHONY: build clean run test frontend help
+.PHONY: build clean run test frontend release release-dry help
 
 # Default target
 all: build
@@ -69,21 +69,53 @@ init:
 	@mkdir -p built db certs logs
 	@echo "✅ Directory structure created"
 
+# Release management
+release-patch:
+	@echo "🚀 Creating patch release..."
+	@./scripts/release.sh patch
+
+release-minor:
+	@echo "🚀 Creating minor release..."
+	@./scripts/release.sh minor
+
+release-major:
+	@echo "🚀 Creating major release..."
+	@./scripts/release.sh major
+
+release:
+	@echo "🚀 Creating patch release (default)..."
+	@./scripts/release.sh patch
+
+release-dry:
+	@echo "🧪 Dry run patch release..."
+	@./scripts/release.sh patch --dry-run
+
 # Help target
 help:
 	@echo "SREootb Build System"
 	@echo "==================="
 	@echo ""
-	@echo "Targets:"
+	@echo "Build Targets:"
 	@echo "  build         Build the application (default)"
 	@echo "  build-release Build with full version information"
 	@echo "  frontend      Build the frontend only"
 	@echo "  clean         Clean all build artifacts and database"
 	@echo "  clean-build   Clean only build artifacts (keep database)"
+	@echo ""
+	@echo "Development Targets:"
 	@echo "  run           Build and run the server"
 	@echo "  dev           Build and run in development mode"
 	@echo "  test          Run tests"
 	@echo "  config        Generate configuration files"
+	@echo ""
+	@echo "Release Targets:"
+	@echo "  release       Create patch release (default)"
+	@echo "  release-patch Create patch release (v1.0.1)"
+	@echo "  release-minor Create minor release (v1.1.0)"
+	@echo "  release-major Create major release (v2.0.0)"
+	@echo "  release-dry   Test release process without changes"
+	@echo ""
+	@echo "Utility Targets:"
 	@echo "  db-status     Show database file status"
 	@echo "  init          Create directory structure"
 	@echo "  help          Show this help message"
@@ -94,4 +126,9 @@ help:
 	@echo "  certs/        SSL certificates"
 	@echo "  logs/         Log files"
 	@echo "  frontend/     Frontend source code"
-	@echo "  web/          Built frontend assets" 
+	@echo "  web/          Built frontend assets"
+	@echo ""
+	@echo "Release Requirements:"
+	@echo "  - GitHub CLI (gh) installed and authenticated"
+	@echo "  - Clean git working directory"
+	@echo "  - Push access to GitHub repository" 
