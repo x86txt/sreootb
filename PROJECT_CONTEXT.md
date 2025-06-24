@@ -85,15 +85,24 @@ The agent system is the primary focus of development work:
 ## CLI Commands
 
 ### Available Modes
-- **`sreootb standalone`** - Run server + local agent in single process (recommended for simple deployments)
+- **`sreootb standalone`** - Run server + local agent in single process with full server options (recommended for simple deployments)
 - **`sreootb server`** - Run monitoring server only
 - **`sreootb agent`** - Run monitoring agent only
 
 ### Command Features
 - All commands support `--gen-config` to generate sample configuration files
+- Standalone mode supports ALL server options (TLS, CockroachDB, etc.) plus agent options
 - Global flags: `--config`, `--log-level`, `--log-format`
-- Standalone mode uses SQLite and auto-generates internal API keys
+- Auto-generates secure internal API keys
 - Built-in help system with `--help` for each command
+
+### Standalone Mode Enhanced Features
+- **Full Server Compatibility**: All server flags available (TLS certs, database config, HTTP/3, etc.)
+- **Database Flexibility**: SQLite (default) or CockroachDB for HA deployments
+- **TLS Options**: Auto-TLS (default) or custom certificates
+- **Agent Configuration**: Local agent with configurable check intervals and health endpoints
+- **Systemd Support**: `--gen-systemd` generates service files
+- **Production Ready**: Can handle complex deployments with custom configurations
 
 ### Release Commands
 - **`make release`** - Create patch release with GitHub integration
@@ -112,10 +121,29 @@ The agent system is the primary focus of development work:
 - **Monitoring**: Configurable scan intervals (10s to 24h)
 
 ### Deployment Modes
-1. **Standalone Mode**: Single process running both server and local agent with SQLite (NEW - perfect for simple deployments)
+1. **Standalone Mode**: Single process running both server and local agent with full server options (NEW - perfect for any deployment)
 2. **Single Instance**: SQLite database, server-only deployment
 3. **High Availability**: 3-node CockroachDB cluster with multiple SREootb instances
 4. **Agent Network**: Central server with distributed monitoring agents
+
+### Standalone Mode Examples
+```bash
+# Basic SQLite deployment
+sreootb standalone
+
+# Custom TLS certificates
+sreootb standalone --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
+
+# CockroachDB HA deployment
+sreootb standalone --db-type cockroachdb --db-host localhost --db-database sreootb
+
+# Custom ports and intervals
+sreootb standalone --bind 0.0.0.0:9090 --agent-bind 127.0.0.1:9091 --check-interval 60s
+
+# Production deployment with config file
+sreootb standalone --gen-config
+sreootb standalone --config sreootb-standalone.yaml
+```
 
 ## Build System
 

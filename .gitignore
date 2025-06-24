@@ -134,4 +134,7 @@ coverage.html
 
 # Backup files
 *.bak
-*.backup 
+*.backup
+
+# manual releases
+/release*/

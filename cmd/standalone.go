@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -33,33 +34,86 @@ using an internally generated API key. This provides an "out of the box" monitor
 func init() {
 	rootCmd.AddCommand(standaloneCmd)
 
-	// Standalone-specific flags (combines common server and agent flags)
+	// Server flags (same as server command)
 	standaloneCmd.Flags().String("bind", "0.0.0.0:8080", "address to bind the web server to")
-	standaloneCmd.Flags().String("agent-bind", "127.0.0.1:8082", "address to bind the agent health endpoint")
-	standaloneCmd.Flags().String("db-path", "./db/sreootb.db", "path to SQLite database file")
+	standaloneCmd.Flags().String("tls-cert", "", "path to TLS certificate file")
+	standaloneCmd.Flags().String("tls-key", "", "path to TLS private key file")
 	standaloneCmd.Flags().Bool("auto-tls", true, "enable automatic TLS certificate generation")
-	standaloneCmd.Flags().Duration("check-interval", 30*time.Second, "agent check interval")
+	standaloneCmd.Flags().Bool("http3", false, "enable HTTP/3 support (requires TLS)")
+
+	// Database configuration flags
+	standaloneCmd.Flags().String("db-type", "sqlite", "database type: sqlite or cockroachdb")
+	standaloneCmd.Flags().String("db-sqlite-path", "./db/sreootb.db", "path to SQLite database file (when using sqlite)")
+	standaloneCmd.Flags().String("db-host", "", "database host (when using cockroachdb)")
+	standaloneCmd.Flags().Int("db-port", 26257, "database port (when using cockroachdb)")
+	standaloneCmd.Flags().String("db-database", "", "database name (when using cockroachdb)")
+	standaloneCmd.Flags().String("db-user", "", "database user (when using cockroachdb)")
+	standaloneCmd.Flags().String("db-password", "", "database password (when using cockroachdb)")
+	standaloneCmd.Flags().String("db-ssl-mode", "require", "SSL mode for CockroachDB connection")
+	standaloneCmd.Flags().String("db-ssl-root-cert", "", "path to SSL root certificate")
+	standaloneCmd.Flags().String("db-ssl-cert", "", "path to SSL client certificate")
+	standaloneCmd.Flags().String("db-ssl-key", "", "path to SSL client key")
+	standaloneCmd.Flags().Int("db-max-open-conns", 25, "maximum number of open database connections")
+	standaloneCmd.Flags().Int("db-max-idle-conns", 5, "maximum number of idle database connections")
+
+	// Server-specific settings
 	standaloneCmd.Flags().String("min-scan-interval", "10s", "minimum allowed scan interval")
 	standaloneCmd.Flags().String("max-scan-interval", "24h", "maximum allowed scan interval")
+	standaloneCmd.Flags().Bool("dev-mode", false, "enable development mode")
+
+	// Agent-specific flags
+	standaloneCmd.Flags().String("agent-bind", "127.0.0.1:8082", "address to bind the agent health endpoint")
+	standaloneCmd.Flags().Duration("check-interval", 30*time.Second, "agent check interval")
+	standaloneCmd.Flags().Bool("insecure-tls", false, "skip TLS certificate verification for agent (insecure)")
 
 	// Config generation flags
 	standaloneCmd.Flags().Bool("gen-config", false, "generate sample standalone configuration file")
+	standaloneCmd.Flags().Bool("gen-systemd", false, "generate systemd service file for standalone")
 
-	// Bind flags to viper with standalone prefix to avoid conflicts
-	viper.BindPFlag("standalone.server_bind", standaloneCmd.Flags().Lookup("bind"))
-	viper.BindPFlag("standalone.agent_bind", standaloneCmd.Flags().Lookup("agent-bind"))
-	viper.BindPFlag("standalone.db_path", standaloneCmd.Flags().Lookup("db-path"))
-	viper.BindPFlag("standalone.auto_tls", standaloneCmd.Flags().Lookup("auto-tls"))
-	viper.BindPFlag("standalone.check_interval", standaloneCmd.Flags().Lookup("check-interval"))
-	viper.BindPFlag("standalone.min_scan_interval", standaloneCmd.Flags().Lookup("min-scan-interval"))
-	viper.BindPFlag("standalone.max_scan_interval", standaloneCmd.Flags().Lookup("max-scan-interval"))
+	// Bind server flags to viper with standalone prefix
+	viper.BindPFlag("standalone.server.bind", standaloneCmd.Flags().Lookup("bind"))
+	viper.BindPFlag("standalone.server.tls_cert", standaloneCmd.Flags().Lookup("tls-cert"))
+	viper.BindPFlag("standalone.server.tls_key", standaloneCmd.Flags().Lookup("tls-key"))
+	viper.BindPFlag("standalone.server.auto_tls", standaloneCmd.Flags().Lookup("auto-tls"))
+	viper.BindPFlag("standalone.server.http3", standaloneCmd.Flags().Lookup("http3"))
+
+	// Bind database flags to viper
+	viper.BindPFlag("standalone.server.database.type", standaloneCmd.Flags().Lookup("db-type"))
+	viper.BindPFlag("standalone.server.database.sqlite_path", standaloneCmd.Flags().Lookup("db-sqlite-path"))
+	viper.BindPFlag("standalone.server.database.host", standaloneCmd.Flags().Lookup("db-host"))
+	viper.BindPFlag("standalone.server.database.port", standaloneCmd.Flags().Lookup("db-port"))
+	viper.BindPFlag("standalone.server.database.database", standaloneCmd.Flags().Lookup("db-database"))
+	viper.BindPFlag("standalone.server.database.user", standaloneCmd.Flags().Lookup("db-user"))
+	viper.BindPFlag("standalone.server.database.password", standaloneCmd.Flags().Lookup("db-password"))
+	viper.BindPFlag("standalone.server.database.ssl_mode", standaloneCmd.Flags().Lookup("db-ssl-mode"))
+	viper.BindPFlag("standalone.server.database.ssl_root_cert", standaloneCmd.Flags().Lookup("db-ssl-root-cert"))
+	viper.BindPFlag("standalone.server.database.ssl_cert", standaloneCmd.Flags().Lookup("db-ssl-cert"))
+	viper.BindPFlag("standalone.server.database.ssl_key", standaloneCmd.Flags().Lookup("db-ssl-key"))
+	viper.BindPFlag("standalone.server.database.max_open_conns", standaloneCmd.Flags().Lookup("db-max-open-conns"))
+	viper.BindPFlag("standalone.server.database.max_idle_conns", standaloneCmd.Flags().Lookup("db-max-idle-conns"))
+
+	// Bind server settings
+	viper.BindPFlag("standalone.server.min_scan_interval", standaloneCmd.Flags().Lookup("min-scan-interval"))
+	viper.BindPFlag("standalone.server.max_scan_interval", standaloneCmd.Flags().Lookup("max-scan-interval"))
+	viper.BindPFlag("standalone.server.dev_mode", standaloneCmd.Flags().Lookup("dev-mode"))
+
+	// Bind agent flags
+	viper.BindPFlag("standalone.agent.bind", standaloneCmd.Flags().Lookup("agent-bind"))
+	viper.BindPFlag("standalone.agent.check_interval", standaloneCmd.Flags().Lookup("check-interval"))
+	viper.BindPFlag("standalone.agent.insecure_tls", standaloneCmd.Flags().Lookup("insecure-tls"))
 }
 
 func runStandalone(cmd *cobra.Command, args []string) error {
-	// Check for config generation flag first
+	// Check for config generation flags first
 	genConfig, _ := cmd.Flags().GetBool("gen-config")
+	genSystemd, _ := cmd.Flags().GetBool("gen-systemd")
+
 	if genConfig {
 		return generateStandaloneConfig()
+	}
+
+	if genSystemd {
+		return generateStandaloneSystemd()
 	}
 
 	log.Info().Msg("Starting SREootb in standalone mode (server + local agent)")
@@ -145,14 +199,37 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 		return nil, fmt.Errorf("failed to generate admin API key: %w", err)
 	}
 
-	// Get flag values
+	// Get server flag values
 	serverBind, _ := cmd.Flags().GetString("bind")
-	agentBind, _ := cmd.Flags().GetString("agent-bind")
-	dbPath, _ := cmd.Flags().GetString("db-path")
+	tlsCert, _ := cmd.Flags().GetString("tls-cert")
+	tlsKey, _ := cmd.Flags().GetString("tls-key")
 	autoTLS, _ := cmd.Flags().GetBool("auto-tls")
-	checkInterval, _ := cmd.Flags().GetDuration("check-interval")
+	http3, _ := cmd.Flags().GetBool("http3")
+
+	// Database flags
+	dbType, _ := cmd.Flags().GetString("db-type")
+	dbSQLitePath, _ := cmd.Flags().GetString("db-sqlite-path")
+	dbHost, _ := cmd.Flags().GetString("db-host")
+	dbPort, _ := cmd.Flags().GetInt("db-port")
+	dbDatabase, _ := cmd.Flags().GetString("db-database")
+	dbUser, _ := cmd.Flags().GetString("db-user")
+	dbPassword, _ := cmd.Flags().GetString("db-password")
+	dbSSLMode, _ := cmd.Flags().GetString("db-ssl-mode")
+	dbSSLRootCert, _ := cmd.Flags().GetString("db-ssl-root-cert")
+	dbSSLCert, _ := cmd.Flags().GetString("db-ssl-cert")
+	dbSSLKey, _ := cmd.Flags().GetString("db-ssl-key")
+	dbMaxOpenConns, _ := cmd.Flags().GetInt("db-max-open-conns")
+	dbMaxIdleConns, _ := cmd.Flags().GetInt("db-max-idle-conns")
+
+	// Server settings
 	minScanIntervalStr, _ := cmd.Flags().GetString("min-scan-interval")
 	maxScanIntervalStr, _ := cmd.Flags().GetString("max-scan-interval")
+	devMode, _ := cmd.Flags().GetBool("dev-mode")
+
+	// Agent flags
+	agentBind, _ := cmd.Flags().GetString("agent-bind")
+	checkInterval, _ := cmd.Flags().GetDuration("check-interval")
+	insecureTLS, _ := cmd.Flags().GetBool("insecure-tls")
 
 	// Parse scan intervals to Duration
 	minScanInterval, err := time.ParseDuration(minScanIntervalStr)
@@ -173,7 +250,7 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 
 	// Build server URL for agent (use localhost since they're in same process)
 	serverURL := "http://localhost:8080"
-	if autoTLS {
+	if autoTLS || (tlsCert != "" && tlsKey != "") {
 		serverURL = "https://localhost:8080"
 	}
 
@@ -185,15 +262,30 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 		},
 		Server: config.ServerConfig{
 			Bind:    serverBind,
+			TLSCert: tlsCert,
+			TLSKey:  tlsKey,
 			AutoTLS: autoTLS,
 			Database: config.DatabaseConfig{
-				Type:       "sqlite",
-				SQLitePath: dbPath,
+				Type:            dbType,
+				SQLitePath:      dbSQLitePath,
+				Host:            dbHost,
+				Port:            dbPort,
+				Database:        dbDatabase,
+				User:            dbUser,
+				Password:        dbPassword,
+				SSLMode:         dbSSLMode,
+				SSLRootCert:     dbSSLRootCert,
+				SSLCert:         dbSSLCert,
+				SSLKey:          dbSSLKey,
+				MaxOpenConns:    dbMaxOpenConns,
+				MaxIdleConns:    dbMaxIdleConns,
+				ConnMaxLifetime: 300 * time.Second, // Default values
+				ConnMaxIdleTime: 60 * time.Second,
 			},
 			AdminAPIKey:     adminAPIKey,
 			MinScanInterval: minScanInterval,
 			MaxScanInterval: maxScanInterval,
-			DevMode:         false,
+			DevMode:         devMode,
 		},
 		Agent: config.AgentConfig{
 			ServerURL:     serverURL,
@@ -201,20 +293,25 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 			AgentID:       hostname + "-local",
 			CheckInterval: checkInterval,
 			Bind:          agentBind,
-			InsecureTLS:   autoTLS, // If using auto-TLS, skip verification for localhost
+			InsecureTLS:   insecureTLS,
 		},
 	}
 
-	// Ensure database directory exists
-	if err := os.MkdirAll("./db", 0755); err != nil {
-		return nil, fmt.Errorf("failed to create database directory: %w", err)
+	// Ensure database directory exists for SQLite
+	if dbType == "sqlite" {
+		dbDir := filepath.Dir(dbSQLitePath)
+		if err := os.MkdirAll(dbDir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create database directory: %w", err)
+		}
 	}
 
 	log.Info().
 		Str("server_bind", serverBind).
 		Str("agent_bind", agentBind).
-		Str("db_path", dbPath).
+		Str("db_type", dbType).
+		Str("db_path", dbSQLitePath).
 		Bool("auto_tls", autoTLS).
+		Bool("http3", http3).
 		Dur("check_interval", checkInterval).
 		Msg("Standalone configuration created")
 
@@ -244,13 +341,38 @@ log:
 
 # Server configuration
 server:
+  # Web server settings
   bind: "0.0.0.0:8080"                     # Web server bind address
-  auto_tls: true                           # Enable automatic TLS certificate generation
   
-  # Database Configuration (SQLite for standalone mode)
+  # TLS Configuration
+  auto_tls: true                           # Enable automatic ed25519 TLS certificate generation
+  # tls_cert: "/path/to/cert.pem"          # Custom TLS certificate (overrides auto_tls)
+  # tls_key: "/path/to/key.pem"            # Custom TLS private key
+  # http3: false                           # Enable HTTP/3 support (requires TLS)
+  
+  # Database Configuration
   database:
-    type: "sqlite"                         # Use SQLite for simplicity
+    # SQLite configuration (default for standalone mode)
+    type: "sqlite"                         # Database type: sqlite or cockroachdb
     sqlite_path: "./db/sreootb.db"         # SQLite database file path
+    
+    # CockroachDB configuration (uncomment to use CockroachDB cluster)
+    # type: "cockroachdb"
+    # host: "localhost"                    # CockroachDB cluster host
+    # port: 26257                          # CockroachDB port
+    # database: "sreootb"                  # Database name
+    # user: "sreootb_user"                 # Database user
+    # password: "secure_password"          # Database password
+    # ssl_mode: "require"                  # SSL mode: disable, allow, prefer, require
+    # ssl_root_cert: "/path/to/ca.crt"     # SSL root certificate
+    # ssl_cert: "/path/to/client.crt"      # SSL client certificate
+    # ssl_key: "/path/to/client.key"       # SSL client key
+    
+    # Connection pool settings (for CockroachDB)
+    max_open_conns: 25                     # Maximum open connections
+    max_idle_conns: 5                      # Maximum idle connections
+    conn_max_lifetime: "300s"              # Connection maximum lifetime
+    conn_max_idle_time: "60s"              # Connection maximum idle time
   
   # Authentication
   admin_api_key: "%s"                      # Admin API key (auto-generated)
@@ -269,12 +391,20 @@ agent:
   bind: "127.0.0.1:8082"                   # Agent health endpoint
   insecure_tls: true                       # Skip TLS verification for localhost
 
-# Standalone mode automatically:
-# 1. Creates SQLite database in ./db/ directory
-# 2. Starts web server with monitoring dashboard
-# 3. Starts local agent that connects to the server
-# 4. Uses the same API key for both components
-# 5. Provides complete monitoring solution in single process
+# Standalone mode features:
+# 1. Single process runs both server and agent
+# 2. Auto-generates secure API keys
+# 3. Supports all server and agent configuration options
+# 4. Can use SQLite (simple) or CockroachDB (HA)
+# 5. Supports custom TLS certificates or auto-TLS
+# 6. Perfect for simple deployments and development
+
+# Usage examples:
+# Basic:           sreootb standalone
+# Custom config:   sreootb standalone --config sreootb-standalone.yaml
+# Custom TLS:      sreootb standalone --tls-cert cert.pem --tls-key key.pem
+# CockroachDB:     sreootb standalone --db-type cockroachdb --db-host localhost
+# Custom ports:    sreootb standalone --bind 0.0.0.0:9090 --agent-bind 127.0.0.1:9091
 `, apiKey, apiKey, hostname)
 
 	filename := "sreootb-standalone.yaml"
@@ -291,5 +421,70 @@ agent:
 	fmt.Printf("   sreootb standalone --config %s\n", filename)
 	fmt.Println("\n🚀 Or run with default settings:")
 	fmt.Println("   sreootb standalone")
+	return nil
+}
+
+func generateStandaloneSystemd() error {
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = "/usr/local/bin/sreootb"
+	} else {
+		execPath, _ = filepath.Abs(execPath)
+	}
+
+	serviceContent := fmt.Sprintf(`[Unit]
+Description=SRE Out of the Box Standalone
+Documentation=https://github.com/x86txt/sreootb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sreootb
+Group=sreootb
+ExecStart=%s standalone --config /etc/sreootb/sreootb-standalone.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sreootb-standalone
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sreootb /var/log/sreootb
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=512M
+
+# Working directory
+WorkingDirectory=/var/lib/sreootb
+
+# Environment
+Environment=SREOOB_MODE=standalone
+
+[Install]
+WantedBy=multi-user.target
+`, execPath)
+
+	filename := "sreootb-standalone.service"
+	if err := os.WriteFile(filename, []byte(serviceContent), 0644); err != nil {
+		return fmt.Errorf("failed to write systemd service file: %w", err)
+	}
+
+	fmt.Printf("✅ Systemd service file generated: %s\n", filename)
+	fmt.Println("📝 To install and start the service:")
+	fmt.Println("   sudo cp sreootb-standalone.service /etc/systemd/system/")
+	fmt.Println("   sudo mkdir -p /etc/sreootb /var/lib/sreootb /var/log/sreootb")
+	fmt.Println("   sudo cp sreootb-standalone.yaml /etc/sreootb/")
+	fmt.Println("   sudo useradd -r -s /bin/false sreootb")
+	fmt.Println("   sudo chown -R sreootb:sreootb /var/lib/sreootb /var/log/sreootb")
+	fmt.Println("   sudo systemctl daemon-reload")
+	fmt.Println("   sudo systemctl enable --now sreootb-standalone")
 	return nil
 }

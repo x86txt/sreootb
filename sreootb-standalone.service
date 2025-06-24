@@ -1,0 +1,38 @@
+[Unit]
+Description=SRE Out of the Box Standalone
+Documentation=https://github.com/x86txt/sreootb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sreootb
+Group=sreootb
+ExecStart=/home/matt/code/sreootb/built/sreootb standalone --config /etc/sreootb/sreootb-standalone.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sreootb-standalone
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sreootb /var/log/sreootb
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=512M
+
+# Working directory
+WorkingDirectory=/var/lib/sreootb
+
+# Environment
+Environment=SREOOB_MODE=standalone
+
+[Install]
+WantedBy=multi-user.target
