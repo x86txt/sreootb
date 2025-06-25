@@ -498,31 +498,42 @@ func (s *Server) handleNextJSApp(w http.ResponseWriter, r *http.Request) {
 // handleStaticFiles serves static assets from the embedded Next.js build
 func (s *Server) handleStaticFiles() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Remove the /_next prefix and serve from staticFS
-		path := strings.TrimPrefix(r.URL.Path, "/_next")
-		if path == "" || path == "/" {
+		// For URLs like /_next/static/css/file.css or /static/css/file.css
+		// we need to map them to the correct embedded file path
+		requestPath := r.URL.Path
+
+		// Determine the file path in the embedded filesystem
+		var filePath string
+		if strings.HasPrefix(requestPath, "/_next/static/") {
+			// For /_next/static/... URLs, map to web/_next/static/...
+			filePath = "web" + requestPath
+		} else if strings.HasPrefix(requestPath, "/static/") {
+			// For /static/... URLs, map to web/_next/static/...
+			filePath = "web/_next" + requestPath
+		} else {
+			// Fallback for other patterns
 			http.NotFound(w, r)
 			return
 		}
 
-		// Try to open the file from the static filesystem (files are embedded with "web/_next/static/" prefix)
-		filePath := "web/_next/static" + strings.TrimPrefix(path, "/static")
+		// Try to open the file from the static filesystem
 		file, err := s.staticFS.Open(filePath)
 		if err != nil {
+			log.Debug().Str("path", requestPath).Str("file_path", filePath).Err(err).Msg("Static file not found")
 			http.NotFound(w, r)
 			return
 		}
 		defer file.Close()
 
 		// Set appropriate content type based on file extension
-		ext := filepath.Ext(path)
+		ext := filepath.Ext(requestPath)
 		switch ext {
 		case ".js":
-			w.Header().Set("Content-Type", "application/javascript")
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		case ".css":
-			w.Header().Set("Content-Type", "text/css")
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		case ".json":
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		case ".woff2":
 			w.Header().Set("Content-Type", "font/woff2")
 		case ".woff":
@@ -537,12 +548,16 @@ func (s *Server) handleStaticFiles() http.Handler {
 			w.Header().Set("Content-Type", "image/svg+xml")
 		case ".ico":
 			w.Header().Set("Content-Type", "image/x-icon")
+		default:
+			// Let Go's DetectContentType handle it
+			w.Header().Set("Content-Type", "application/octet-stream")
 		}
 
 		// Set cache headers for static assets
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 
-		http.ServeContent(w, r, path, time.Time{}, file.(io.ReadSeeker))
+		log.Debug().Str("path", requestPath).Str("file_path", filePath).Str("content_type", w.Header().Get("Content-Type")).Msg("Serving static file")
+		http.ServeContent(w, r, requestPath, time.Time{}, file.(io.ReadSeeker))
 	})
 }
 
