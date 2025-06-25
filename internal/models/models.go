@@ -438,14 +438,15 @@ func (m *MonitorResultRequest) Validate() error {
 
 	// Validate status values
 	validStatuses := map[string]bool{
-		"up":      true,
-		"down":    true,
-		"timeout": true,
-		"error":   true,
+		"up":       true,
+		"down":     true,
+		"degraded": true,
+		"timeout":  true,
+		"error":    true,
 	}
 
 	if !validStatuses[m.Status] {
-		return fmt.Errorf("status must be one of: up, down, timeout, error")
+		return fmt.Errorf("status must be one of: up, down, degraded, timeout, error")
 	}
 
 	// Response time should be positive if provided
