@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -248,10 +249,16 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 		hostname = "standalone-agent"
 	}
 
+	// Extract port from serverBind for agent connection
+	serverPort := "8080" // default
+	if colonIndex := strings.LastIndex(serverBind, ":"); colonIndex != -1 {
+		serverPort = serverBind[colonIndex+1:]
+	}
+
 	// Build server URL for agent (use localhost since they're in same process)
-	serverURL := "http://localhost:8080"
+	serverURL := fmt.Sprintf("http://localhost:%s", serverPort)
 	if autoTLS || (tlsCert != "" && tlsKey != "") {
-		serverURL = "https://localhost:8080"
+		serverURL = fmt.Sprintf("https://localhost:%s", serverPort)
 	}
 
 	// Create combined configuration
@@ -261,10 +268,11 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 			Format: viper.GetString("log.format"),
 		},
 		Server: config.ServerConfig{
-			Bind:    serverBind,
-			TLSCert: tlsCert,
-			TLSKey:  tlsKey,
-			AutoTLS: autoTLS,
+			Bind:      serverBind,
+			AgentBind: "0.0.0.0:8081", // Default agent API bind
+			TLSCert:   tlsCert,
+			TLSKey:    tlsKey,
+			AutoTLS:   autoTLS,
 			Database: config.DatabaseConfig{
 				Type:            dbType,
 				SQLitePath:      dbSQLitePath,
