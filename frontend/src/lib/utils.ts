@@ -70,6 +70,8 @@ export function applyAccentColor(hexColor: string) {
   // Apply to CSS custom properties
   document.documentElement.style.setProperty('--primary', hslString);
   document.documentElement.style.setProperty('--ring', hslString);
+  document.documentElement.style.setProperty('--destructive', hslString);
+  document.documentElement.style.setProperty('--accent', hslString);
   
   // For lighter/darker variants, adjust lightness
   const lighterHsl = { ...hsl, l: Math.min(hsl.l + 0.1, 0.95) };
@@ -80,6 +82,35 @@ export function applyAccentColor(hexColor: string) {
   
   // Apply variants
   document.documentElement.style.setProperty('--primary-foreground', hsl.l > 0.5 ? '0 0% 0%' : '0 0% 100%');
+  document.documentElement.style.setProperty('--destructive-foreground', '0 0% 98%');
+  document.documentElement.style.setProperty('--accent-foreground', hsl.l > 0.5 ? '0 0% 0%' : '0 0% 100%');
+  
+  // Convert hex to RGB for shadow effects
+  const rgb = hexToRgb(hexColor);
+  
+  // Update custom shadows with the new accent color
+  const cardShadowLight = `-3px -3px 8px 1px rgba(0,0,0,0.1), 3px 3px 8px 1px rgba(${rgb.r},${rgb.g},${rgb.b},0.12)`;
+  const cardShadowDark = `-3px -3px 8px 1px rgba(0,0,0,0.3), 3px 3px 8px 1px rgba(${rgb.r},${rgb.g},${rgb.b},0.18)`;
+  
+  // Apply the updated shadows to the document
+  const style = document.createElement('style');
+  style.textContent = `
+    .shadow-card {
+      box-shadow: ${cardShadowLight} !important;
+    }
+    .shadow-card-dark {
+      box-shadow: ${cardShadowDark} !important;
+    }
+  `;
+  
+  // Remove any existing accent color styles
+  const existing = document.querySelector('#accent-color-styles');
+  if (existing) {
+    existing.remove();
+  }
+  
+  style.id = 'accent-color-styles';
+  document.head.appendChild(style);
 }
 
 export function hexToHsl(hex: string): { h: number; s: number; l: number } {
@@ -118,4 +149,16 @@ export function hexToHsl(hex: string): { h: number; s: number; l: number } {
     s: Math.round(s * 100) / 100,
     l: Math.round(l * 100) / 100
   };
+}
+
+export function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  // Remove # if present
+  hex = hex.replace('#', '');
+  
+  // Convert hex to RGB
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  
+  return { r, g, b };
 } 
