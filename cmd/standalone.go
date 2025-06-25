@@ -249,16 +249,11 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 		hostname = "standalone-agent"
 	}
 
-	// Extract port from serverBind for agent connection
-	serverPort := "8080" // default
-	if colonIndex := strings.LastIndex(serverBind, ":"); colonIndex != -1 {
-		serverPort = serverBind[colonIndex+1:]
-	}
-
 	// Build server URL for agent (use localhost since they're in same process)
-	serverURL := fmt.Sprintf("http://localhost:%s", serverPort)
+	// Agent should connect to the agent API server (port 8081), not web GUI server
+	agentServerURL := "http://localhost:8081"
 	if autoTLS || (tlsCert != "" && tlsKey != "") {
-		serverURL = fmt.Sprintf("https://localhost:%s", serverPort)
+		agentServerURL = "https://localhost:8081"
 	}
 
 	// Create combined configuration
@@ -296,14 +291,22 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 			DevMode:         devMode,
 		},
 		Agent: config.AgentConfig{
-			ServerURL:     serverURL,
-			APIKey:        adminAPIKey, // Use same key for simplicity
+			ServerURL:     agentServerURL, // Connect to agent API server, not web GUI
+			APIKey:        "",             // Will be set to server's agent API key after ensureAgentAPIKey
 			AgentID:       hostname + "-local",
 			CheckInterval: checkInterval,
 			Bind:          agentBind,
 			InsecureTLS:   insecureTLS,
 		},
 	}
+
+	// Ensure agent API key is generated/loaded by the server
+	if err := ensureAgentAPIKeyForStandalone(cfg); err != nil {
+		return nil, fmt.Errorf("failed to ensure agent API key: %w", err)
+	}
+
+	// Now set the agent to use the server's agent API key
+	cfg.Agent.APIKey = cfg.Server.AgentAPIKey
 
 	// Ensure database directory exists for SQLite
 	if dbType == "sqlite" {
@@ -324,6 +327,33 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 		Msg("Standalone configuration created")
 
 	return cfg, nil
+}
+
+// ensureAgentAPIKeyForStandalone ensures the agent API key exists for standalone mode
+func ensureAgentAPIKeyForStandalone(cfg *config.Config) error {
+	keyFile := "agent-api.key"
+
+	// Try to read existing key from file
+	if data, err := os.ReadFile(keyFile); err == nil {
+		cfg.Server.AgentAPIKey = strings.TrimSpace(string(data))
+		return nil
+	}
+
+	// Generate new key if file doesn't exist or is empty
+	if cfg.Server.AgentAPIKey == "" {
+		key, err := generateSecureAPIKey()
+		if err != nil {
+			return fmt.Errorf("failed to generate agent API key: %w", err)
+		}
+		cfg.Server.AgentAPIKey = key
+	}
+
+	// Save key to file for persistence
+	if err := os.WriteFile(keyFile, []byte(cfg.Server.AgentAPIKey), 0600); err != nil {
+		return fmt.Errorf("failed to save agent API key: %w", err)
+	}
+
+	return nil
 }
 
 func generateStandaloneConfig() error {
