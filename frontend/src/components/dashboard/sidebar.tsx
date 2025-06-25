@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { LoginDialog } from "@/components/LoginDialog";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { AccentColorPicker } from "@/components/accent-color-picker";
 
 const navigation = [
   {
@@ -223,6 +225,17 @@ export function Sidebar({}: SidebarProps) {
               </Link>
             );
           })}
+        </div>
+      </div>
+
+      {/* Theme Controls */}
+      <div className="border-t p-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-muted-foreground">Appearance</span>
+          <div className="flex items-center space-x-2">
+            <AccentColorPicker />
+            <ThemeToggle />
+          </div>
         </div>
       </div>
 

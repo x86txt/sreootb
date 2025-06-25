@@ -1171,7 +1171,7 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 	var query string
 	var args []interface{}
 
-	// Build the query using site_checks table instead of monitor_results
+	// Build the query using site_checks table to include error tracking
 	if len(siteIDs) > 0 {
 		placeholders := make([]string, len(siteIDs))
 		for i, id := range siteIDs {
@@ -1186,6 +1186,7 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 				sc.response_time,
 				sc.status,
 				sc.status_code,
+				sc.error_message,
 				sc.checked_at,
 				datetime(
 					(strftime('%%s', sc.checked_at) / (%d * 60)) * (%d * 60),
@@ -1207,6 +1208,7 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 				sc.response_time,
 				sc.status,
 				sc.status_code,
+				sc.error_message,
 				sc.checked_at,
 				datetime(
 					(strftime('%%s', sc.checked_at) / (%d * 60)) * (%d * 60),
@@ -1230,14 +1232,18 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 	siteInfo := make(map[int]map[string]interface{})
 	timeBuckets := make(map[string]map[string]interface{})
 
+	// Track counts for error rate calculation
+	bucketCounts := make(map[string]map[string]int) // [time_bucket][site_id] = {total, errors}
+
 	for rows.Next() {
 		var siteID int
 		var siteName, siteURL, status, timeBucket string
 		var responseTime *float64
 		var statusCode *int
+		var errorMessage *string
 		var checkedAt time.Time
 
-		err := rows.Scan(&siteID, &siteName, &siteURL, &responseTime, &status, &statusCode, &checkedAt, &timeBucket)
+		err := rows.Scan(&siteID, &siteName, &siteURL, &responseTime, &status, &statusCode, &errorMessage, &checkedAt, &timeBucket)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan analytics row: %w", err)
 		}
@@ -1255,7 +1261,7 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 			}
 		}
 
-		// Organize data by time buckets
+		// Initialize time bucket if not exists
 		if _, exists := timeBuckets[timeBucket]; !exists {
 			timeBuckets[timeBucket] = map[string]interface{}{
 				"timestamp":      time.Unix(0, 0).Add(time.Duration(len(timeBuckets)*intervalMinutes) * time.Minute).Format("15:04"),
@@ -1263,12 +1269,57 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 			}
 		}
 
-		// Add response time for this site in this time bucket
-		if responseTime != nil && status == "up" {
-			siteKey := fmt.Sprintf("site_%d", siteID)
+		// Initialize bucket counts if not exists
+		if _, exists := bucketCounts[timeBucket]; !exists {
+			bucketCounts[timeBucket] = make(map[string]int)
+		}
 
-			// For now, use the latest value in the time bucket (could be averaged)
+		siteKey := fmt.Sprintf("site_%d", siteID)
+		siteErrorKey := fmt.Sprintf("site_%d_errors", siteID)
+		siteTotalKey := fmt.Sprintf("site_%d_total", siteID)
+
+		// Count total checks and errors for this site in this time bucket
+		if _, exists := bucketCounts[timeBucket][siteTotalKey]; !exists {
+			bucketCounts[timeBucket][siteTotalKey] = 0
+			bucketCounts[timeBucket][siteErrorKey] = 0
+		}
+		bucketCounts[timeBucket][siteTotalKey]++
+
+		// Determine if this is an error
+		isError := false
+		if status == "down" {
+			isError = true
+		} else if statusCode != nil && (*statusCode >= 400 && *statusCode < 600) {
+			isError = true
+		}
+
+		if isError {
+			bucketCounts[timeBucket][siteErrorKey]++
+		}
+
+		// Add response time for successful checks
+		if responseTime != nil && status == "up" {
+			// Use the latest/most recent value in the time bucket for response time
 			timeBuckets[timeBucket][siteKey] = *responseTime
+		}
+	}
+
+	// Calculate error rates and add to time buckets
+	for timeBucket, bucket := range timeBuckets {
+		for siteIDStr, _ := range bucketCounts[timeBucket] {
+			if strings.HasSuffix(siteIDStr, "_total") {
+				siteKey := strings.TrimSuffix(siteIDStr, "_total")
+				errorKey := siteKey + "_errors"
+				siteErrorRateKey := siteKey + "_error_rate"
+
+				totalChecks := bucketCounts[timeBucket][siteIDStr]
+				errorChecks := bucketCounts[timeBucket][errorKey]
+
+				if totalChecks > 0 {
+					errorRate := float64(errorChecks) / float64(totalChecks) * 100.0
+					bucket[siteErrorRateKey] = errorRate
+				}
+			}
 		}
 	}
 
@@ -1289,22 +1340,37 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 
 	// Calculate averages for "all" view
 	for _, point := range dataPoints {
-		var sum float64
-		var count int
+		var responseTimeSum float64
+		var responseTimeCount int
+		var errorRateSum float64
+		var errorRateCount int
 
 		for key, value := range point {
-			if strings.HasPrefix(key, "site_") {
+			if strings.HasPrefix(key, "site_") && !strings.HasSuffix(key, "_error_rate") {
+				// Response time values
 				if val, ok := value.(float64); ok {
-					sum += val
-					count++
+					responseTimeSum += val
+					responseTimeCount++
+				}
+			} else if strings.HasSuffix(key, "_error_rate") {
+				// Error rate values
+				if val, ok := value.(float64); ok {
+					errorRateSum += val
+					errorRateCount++
 				}
 			}
 		}
 
-		if count > 0 {
-			point["average"] = sum / float64(count)
+		if responseTimeCount > 0 {
+			point["average"] = responseTimeSum / float64(responseTimeCount)
 		} else {
 			point["average"] = nil
+		}
+
+		if errorRateCount > 0 {
+			point["average_error_rate"] = errorRateSum / float64(errorRateCount)
+		} else {
+			point["average_error_rate"] = 0.0
 		}
 	}
 

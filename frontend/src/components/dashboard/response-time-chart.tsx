@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { Badge } from '@/components/ui/badge';
-import { Activity, TrendingUp, Trash2 } from 'lucide-react';
+import { Activity, TrendingUp, Trash2, AlertTriangle, Clock } from 'lucide-react';
 import { getSitesAnalytics, type SiteAnalytics, type SiteStatus } from '@/lib/api';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -57,6 +57,7 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
   const [analyticsData, setAnalyticsData] = useState<SiteAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [chartMode, setChartMode] = useState<'response_time' | 'error_rate'>('response_time');
 
   const siteOptions = [
     { value: 'all', label: 'All Resources (Average)' },
@@ -70,7 +71,7 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
     if (value === null || value === undefined) return 'No data';
     
     // Handle unit conversion: backend may send seconds (old monitor) or milliseconds (agent-based)
-    // Values >= 1 are likely seconds, values < 1 could be either seconds or milliseconds
+    // Values >= 1 are likely seconds, values < 1 could be either seconds or milliseconds  
     // We'll convert based on magnitude - if < 1 and seems too small, treat as seconds
     let milliseconds: number;
     
@@ -89,6 +90,11 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
       return `${milliseconds.toFixed(2)}ms`;
     }
     return `${Math.round(milliseconds)}ms`;
+  };
+
+  const formatErrorRate = (value: number | null | undefined): string => {
+    if (value === null || value === undefined) return '0.00%';
+    return `${value.toFixed(2)}%`;
   };
 
   const parseCustomTimeToHours = (timeStr: string): number | null => {
@@ -191,25 +197,28 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
     console.log('Building display lines...', { 
       selectedSites, 
       analyticsDataSites: analyticsData.sites,
-      sampleData: analyticsData.data && analyticsData.data.length > 0 ? analyticsData.data[0] : null
+      sampleData: analyticsData.data && analyticsData.data.length > 0 ? analyticsData.data[0] : null,
+      chartMode
     });
     
     if (selectedSites.includes('all') && analyticsData.sites.length >= 1) {
       // For single site when "all" is selected, use site_X key not "average"
       if (analyticsData.sites.length === 1) {
         const siteId = analyticsData.sites[0].id;
+        const dataKey = chartMode === 'error_rate' ? `site_${siteId}_error_rate` : `site_${siteId}`;
         lines.push({
-          key: `site_${siteId}`,
+          key: dataKey,
           name: analyticsData.sites[0].name,
-          color: '#8884d8',
+          color: chartMode === 'error_rate' ? '#ef4444' : '#8884d8',
           strokeWidth: 3
         });
-        console.log(`Added single site line for "all": site_${siteId}`);
+        console.log(`Added single site line for "all": ${dataKey}`);
       } else {
+        const dataKey = chartMode === 'error_rate' ? 'average_error_rate' : 'average';
         lines.push({
-          key: 'average',
-          name: 'Average (All Resources)',
-          color: '#8884d8',
+          key: dataKey,
+          name: chartMode === 'error_rate' ? 'Average Error Rate (All Resources)' : 'Average Response Time (All Resources)',
+          color: chartMode === 'error_rate' ? '#ef4444' : '#8884d8',
           strokeWidth: 3
         });
         console.log('Added average line for multiple sites');
@@ -221,13 +230,16 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
       selectedSites.forEach((siteId, index) => {
         const site = analyticsData.sites.find(s => s.id.toString() === siteId);
         if (site) {
+          const dataKey = chartMode === 'error_rate' ? `site_${siteId}_error_rate` : `site_${siteId}`;
           lines.push({
-            key: `site_${siteId}`,
+            key: dataKey,
             name: site.name,
-            color: CHART_COLORS[index % CHART_COLORS.length],
+            color: chartMode === 'error_rate' ? 
+              ['#ef4444', '#dc2626', '#b91c1c', '#991b1b', '#7f1d1d'][index % 5] :
+              CHART_COLORS[index % CHART_COLORS.length],
             strokeWidth: 2
           });
-          console.log(`Added line for site: ${site.name} (site_${siteId})`);
+          console.log(`Added line for site: ${site.name} (${dataKey})`);
         }
       });
     }
@@ -279,14 +291,18 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
     }
   };
 
-  const getAverageResponseTime = () => {
+  const getAverageValue = () => {
     if (!analyticsData?.data) return null;
     
     const validPoints = analyticsData.data.filter(point => {
       if (selectedSites.includes('all')) {
-        return point.average !== null;
+        const key = chartMode === 'error_rate' ? 'average_error_rate' : 'average';
+        return point[key] !== null && point[key] !== undefined;
       } else {
-        return selectedSites.some(siteId => point[`site_${siteId}`] !== null);
+        return selectedSites.some(siteId => {
+          const key = chartMode === 'error_rate' ? `site_${siteId}_error_rate` : `site_${siteId}`;
+          return point[key] !== null && point[key] !== undefined;
+        });
       }
     });
     
@@ -294,19 +310,26 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
     
     const sum = validPoints.reduce((acc, point) => {
       if (selectedSites.includes('all')) {
-        return acc + (point.average as number || 0);
+        const key = chartMode === 'error_rate' ? 'average_error_rate' : 'average';
+        return acc + ((point[key] as number) || 0);
       } else {
         const siteValues = selectedSites
-          .map(siteId => point[`site_${siteId}`] as number)
-          .filter(val => val !== null);
+          .map(siteId => {
+            const key = chartMode === 'error_rate' ? `site_${siteId}_error_rate` : `site_${siteId}`;
+            return point[key] as number;
+          })
+          .filter(val => val !== null && val !== undefined);
         return acc + (siteValues.length > 0 ? siteValues.reduce((a, b) => a + b, 0) / siteValues.length : 0);
       }
     }, 0);
     
-    return Math.round(sum / validPoints.length);
+    const average = sum / validPoints.length;
+    return chartMode === 'error_rate' ? 
+      parseFloat(average.toFixed(2)) : 
+      Math.round(average);
   };
 
-  const averageResponseTime = getAverageResponseTime();
+  const averageValue = getAverageValue();
 
   const getTimeRangeDescription = () => {
     if (timeRange === 'custom' && customTimeInput) {
@@ -321,20 +344,34 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <Activity className="h-5 w-5 text-muted-foreground" />
+            {chartMode === 'response_time' ? (
+              <Clock className="h-5 w-5 text-muted-foreground" />
+            ) : (
+              <AlertTriangle className="h-5 w-5 text-muted-foreground" />
+            )}
             <div>
-              <CardTitle>Response Time</CardTitle>
+              <CardTitle>
+                {chartMode === 'response_time' ? 'Response Time' : 'Error Rate'}
+              </CardTitle>
               <CardDescription>
-                {selectedSites.includes('all') 
-                  ? `Average response time across all resources`
-                  : `Response time for ${selectedSites.length} selected resource${selectedSites.length !== 1 ? 's' : ''}`}
+                {chartMode === 'response_time' ? (
+                  selectedSites.includes('all') 
+                    ? `Average response time across all resources`
+                    : `Response time for ${selectedSites.length} selected resource${selectedSites.length !== 1 ? 's' : ''}`
+                ) : (
+                  selectedSites.includes('all')
+                    ? `Error rate across all resources (HTTP 4xx/5xx, ping failures)`
+                    : `Error rate for ${selectedSites.length} selected resource${selectedSites.length !== 1 ? 's' : ''}`
+                )}
               </CardDescription>
             </div>
           </div>
           
-          {averageResponseTime !== null && (
+          {averageValue !== null && (
             <div className="text-right">
-              <div className="text-2xl font-bold">{averageResponseTime}ms</div>
+              <div className="text-2xl font-bold">
+                {chartMode === 'response_time' ? `${averageValue}ms` : `${averageValue}%`}
+              </div>
               <div className="flex items-center text-sm text-muted-foreground">
                 <TrendingUp className="h-4 w-4 mr-1" />
                 {getTimeRangeDescription()}
@@ -366,6 +403,18 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
                 </Button>
               )}
             </div>
+          </div>
+          <div className="sm:w-32">
+            <label className="text-sm font-medium mb-2 block">Metric</label>
+            <Select value={chartMode} onValueChange={(value: 'response_time' | 'error_rate') => setChartMode(value)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="response_time">Response Time</SelectItem>
+                <SelectItem value="error_rate">Error Rate</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex-1"></div>
           <div className="sm:w-48">
@@ -458,7 +507,7 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
             <ResponsiveContainer width="100%" height="100%">
               {getDisplayLines().length > 1 ? (
                 // Area chart for multiple sites with shading
-                <AreaChart data={analyticsData.data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                <AreaChart data={analyticsData.data} margin={{ top: 5, right: 30, left: 20, bottom: 25 }}>
                   <CartesianGrid strokeDasharray="0" vertical={false} className="opacity-10" />
                   <XAxis 
                     dataKey="timestamp" 
@@ -470,7 +519,32 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
                     tick={{ fontSize: 12 }}
                     tickLine={false}
                     axisLine={false}
-                    label={{ value: 'Response Time (ms)', angle: -90, position: 'insideLeft' }}
+                    label={{ 
+                      value: chartMode === 'response_time' ? 'Response Time (ms)' : 'Error Rate (%)', 
+                      angle: -90, 
+                      position: 'insideLeft' 
+                    }}
+                    tickFormatter={(value: number) => {
+                      if (chartMode === 'response_time') {
+                        // Convert seconds to milliseconds for response time display
+                        let milliseconds: number;
+                        if (value >= 1) {
+                          milliseconds = value * 1000;
+                        } else if (value > 0.001) {
+                          milliseconds = value * 1000;
+                        } else {
+                          milliseconds = value;
+                        }
+                        
+                        if (milliseconds < 1) {
+                          return `${milliseconds.toFixed(2)}`;
+                        }
+                        return `${Math.round(milliseconds)}`;
+                      } else {
+                        // Error rate is already in percentage
+                        return `${value.toFixed(1)}`;
+                      }
+                    }}
                   />
                   <Tooltip 
                     content={({ active, payload, label }) => {
@@ -492,7 +566,11 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
                                       style={{ backgroundColor: entry.color }}
                                     />
                                     <span className="font-medium">{entry.name}:</span>
-                                    <span>{formatResponseTime(entry.value as number)}</span>
+                                    <span>{
+                                      entry.dataKey?.toString().includes('_error_rate') ? 
+                                        formatErrorRate(entry.value as number) : 
+                                        formatResponseTime(entry.value as number)
+                                    }</span>
                                   </div>
                                   {siteData && (
                                     <div className="ml-5 text-xs text-muted-foreground space-y-0.5">
@@ -549,7 +627,7 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
                 </AreaChart>
               ) : (
                 // Line chart for single site (cleaner look)
-                <LineChart data={analyticsData.data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                <LineChart data={analyticsData.data} margin={{ top: 5, right: 30, left: 20, bottom: 25 }}>
                   <CartesianGrid strokeDasharray="0" vertical={false} className="opacity-10" />
                   <XAxis 
                     dataKey="timestamp" 
@@ -561,7 +639,32 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
                     tick={{ fontSize: 12 }}
                     tickLine={false}
                     axisLine={false}
-                    label={{ value: 'Response Time (ms)', angle: -90, position: 'insideLeft' }}
+                    label={{ 
+                      value: chartMode === 'response_time' ? 'Response Time (ms)' : 'Error Rate (%)', 
+                      angle: -90, 
+                      position: 'insideLeft' 
+                    }}
+                    tickFormatter={(value: number) => {
+                      if (chartMode === 'response_time') {
+                        // Convert seconds to milliseconds for response time display
+                        let milliseconds: number;
+                        if (value >= 1) {
+                          milliseconds = value * 1000;
+                        } else if (value > 0.001) {
+                          milliseconds = value * 1000;
+                        } else {
+                          milliseconds = value;
+                        }
+                        
+                        if (milliseconds < 1) {
+                          return `${milliseconds.toFixed(2)}`;
+                        }
+                        return `${Math.round(milliseconds)}`;
+                      } else {
+                        // Error rate is already in percentage
+                        return `${value.toFixed(1)}`;
+                      }
+                    }}
                   />
                   <Tooltip 
                     content={({ active, payload, label }) => {
@@ -583,7 +686,11 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
                                       style={{ backgroundColor: entry.color }}
                                     />
                                     <span className="font-medium">{entry.name}:</span>
-                                    <span>{formatResponseTime(entry.value as number)}</span>
+                                    <span>{
+                                      entry.dataKey?.toString().includes('_error_rate') ? 
+                                        formatErrorRate(entry.value as number) : 
+                                        formatResponseTime(entry.value as number)
+                                    }</span>
                                   </div>
                                   {siteData && (
                                     <div className="ml-5 text-xs text-muted-foreground space-y-0.5">

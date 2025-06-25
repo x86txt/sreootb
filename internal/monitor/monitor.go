@@ -233,17 +233,15 @@ func (m *Monitor) checkSite(site *models.Site) models.SiteCheck {
 		// Ping check
 		host := site.URL[7:] // Remove 'ping://'
 		start := time.Now()
-		if m.pingHost(host) {
-			duration := time.Since(start)
-			responseTime := duration.Seconds()
-			check.ResponseTime = &responseTime
+		success, errorMsg := m.pingHost(host)
+		duration := time.Since(start)
+		responseTime := duration.Seconds()
+		check.ResponseTime = &responseTime
+
+		if success {
 			check.Status = "up"
 		} else {
-			duration := time.Since(start)
-			responseTime := duration.Seconds()
-			check.ResponseTime = &responseTime
 			check.Status = "down"
-			errorMsg := "ping failed"
 			check.ErrorMessage = &errorMsg
 		}
 	} else {
@@ -307,12 +305,38 @@ func (m *Monitor) httpCheck(url string) (*http.Response, error) {
 	return client.Do(req)
 }
 
-// pingHost performs a ping check
-func (m *Monitor) pingHost(host string) bool {
+// pingHost performs a ping check with detailed error reporting
+func (m *Monitor) pingHost(host string) (bool, string) {
 	// Use system ping command for better reliability
 	cmd := exec.Command("ping", "-c", "1", "-W", "5", host)
-	err := cmd.Run()
-	return err == nil
+	output, err := cmd.CombinedOutput()
+
+	if err == nil {
+		return true, ""
+	}
+
+	// Categorize different types of ping errors based on output
+	outputStr := strings.ToLower(string(output))
+
+	if strings.Contains(outputStr, "unknown host") || strings.Contains(outputStr, "name or service not known") {
+		return false, "DNS resolution failed: unknown host"
+	} else if strings.Contains(outputStr, "network is unreachable") {
+		return false, "Network unreachable"
+	} else if strings.Contains(outputStr, "host is down") || strings.Contains(outputStr, "host unreachable") {
+		return false, "Host unreachable"
+	} else if strings.Contains(outputStr, "timeout") || strings.Contains(outputStr, "time out") {
+		return false, "Ping timeout"
+	} else if strings.Contains(outputStr, "permission denied") {
+		return false, "Permission denied (ping may require privileges)"
+	} else if strings.Contains(outputStr, "100% packet loss") {
+		return false, "100% packet loss"
+	} else {
+		// Generic error with some context from the output if available
+		if len(outputStr) > 0 && len(outputStr) < 200 {
+			return false, fmt.Sprintf("Ping failed: %s", strings.TrimSpace(outputStr))
+		}
+		return false, "Ping failed: unknown error"
+	}
 }
 
 // parseScanInterval parses a scan interval string into a time.Duration

@@ -8,8 +8,6 @@ import { DeleteSitesDialog } from '@/components/DeleteSitesDialog';
 import { MetricsCards } from '@/components/dashboard/metrics-cards';
 import { ResponseTimeChart } from '@/components/dashboard/response-time-chart';
 import { SitesTable } from '@/components/dashboard/sites-table';
-import { ThemeToggle } from '@/components/theme-toggle';
-import { AccentColorPicker } from '@/components/accent-color-picker';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -187,8 +185,6 @@ export default function Home() {
                 </SelectContent>
               </Select>
             </div>
-            <AccentColorPicker />
-            <ThemeToggle />
           </div>
         </div>
       </header>
