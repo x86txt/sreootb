@@ -490,7 +490,22 @@ func validateURL(urlStr string) error {
 		return nil
 	}
 
-	return fmt.Errorf("URL must start with http://, https://, or ping://")
+	if strings.HasPrefix(urlStr, "log://") {
+		// Validate log file path
+		filePath := urlStr[6:] // Remove 'log://' prefix
+		if filePath == "" {
+			return fmt.Errorf("log URL requires a file path")
+		}
+
+		// Basic validation for file path (must be absolute or relative)
+		if filePath == "." || filePath == ".." {
+			return fmt.Errorf("invalid log file path")
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("URL must start with http://, https://, ping://, or log://")
 }
 
 // validateScanInterval validates scan interval format and range

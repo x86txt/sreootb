@@ -634,6 +634,10 @@ func (db *DB) createMonitoringTaskForSite(siteID int, url, interval string) erro
 		timeout = "5s"
 		// Remove ping:// prefix for the actual URL
 		url = strings.TrimPrefix(url, "ping://")
+	} else if strings.HasPrefix(url, "log://") {
+		monitorType = "log"
+		timeout = "60s"
+		// Keep the log:// prefix for the agent to handle
 	} else {
 		// Default to HTTP for unknown protocols
 		monitorType = "http"
