@@ -41,7 +41,7 @@ clean-build:
 # Run the server
 run: build
 	@echo "🚀 Starting SREootb server..."
-	@./built/sreootb server
+	@./built/sreootb standalone --http3 --insecure-tls --bind 0.0.0.0:443
 
 # Run the server in development mode
 dev: build
