@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -930,6 +932,8 @@ func (ts *TaskScheduler) executeTask() {
 		result = ts.executeHTTPCheck(timeout)
 	case "ping":
 		result = ts.executePingCheck(timeout)
+	case "log":
+		result = ts.executeLogCheck(timeout)
 	default:
 		log.Error().Int("task_id", ts.task.ID).Str("monitor_type", ts.task.MonitorType).Msg("Unknown monitor type")
 		result.Status = "error"
@@ -1047,9 +1051,450 @@ func (ts *TaskScheduler) executePingCheck(timeout time.Duration) models.MonitorR
 	return result
 }
 
-// parseDuration parses duration strings like "30s", "2m", "1h"
-func parseDuration(s string) (time.Duration, error) {
-	return time.ParseDuration(s)
+// executeLogCheck performs a log file analysis check
+func (ts *TaskScheduler) executeLogCheck(timeout time.Duration) models.MonitorResultRequest {
+	result := models.MonitorResultRequest{
+		TaskID:    ts.task.ID,
+		CheckedAt: time.Now(),
+	}
+
+	start := time.Now()
+
+	// Parse log configuration from task URL (JSON encoded) or use defaults
+	var logConfig models.LogMonitorConfig
+
+	// Extract file path from URL (remove log:// prefix if present)
+	filePath := ts.task.URL
+	if strings.HasPrefix(filePath, "log://") {
+		filePath = filePath[6:] // Remove "log://" prefix
+	}
+
+	if ts.task.LogConfig != nil {
+		logConfig = *ts.task.LogConfig
+		// Ensure file path is updated
+		if logConfig.FilePath == "" {
+			logConfig.FilePath = filePath
+		}
+	} else {
+		// Try to parse from URL field as JSON (for advanced configs)
+		if strings.HasPrefix(ts.task.URL, "{") {
+			if err := json.Unmarshal([]byte(ts.task.URL), &logConfig); err != nil {
+				// Default configuration for nginx access log
+				logConfig = models.LogMonitorConfig{
+					FilePath:   filePath,
+					Format:     "nginx",
+					TailLines:  1000,
+					Encoding:   "utf-8",
+					ErrorCodes: []int{400, 401, 403, 404, 500, 502, 503, 504},
+				}
+			}
+		} else {
+			// Default configuration for nginx access log
+			logConfig = models.LogMonitorConfig{
+				FilePath:   filePath,
+				Format:     "nginx",
+				TailLines:  1000,
+				Encoding:   "utf-8",
+				ErrorCodes: []int{400, 401, 403, 404, 500, 502, 503, 504},
+			}
+		}
+	}
+
+	// Analyze log file
+	metrics, err := ts.analyzeLogFile(logConfig, timeout)
+	duration := time.Since(start)
+	responseTimeMs := float64(duration.Nanoseconds()) / 1e6
+	result.ResponseTime = &responseTimeMs
+
+	if err != nil {
+		result.Status = "error"
+		errorMsg := fmt.Sprintf("Log analysis failed: %v", err)
+		result.ErrorMessage = &errorMsg
+		return result
+	}
+
+	// Determine status based on error rate
+	if metrics.ErrorRate > 50.0 { // More than 50% errors
+		result.Status = "down"
+		errorMsg := fmt.Sprintf("High error rate: %.2f%%", metrics.ErrorRate)
+		result.ErrorMessage = &errorMsg
+	} else if metrics.ErrorRate > 20.0 { // More than 20% errors
+		result.Status = "degraded"
+		errorMsg := fmt.Sprintf("Elevated error rate: %.2f%%", metrics.ErrorRate)
+		result.ErrorMessage = &errorMsg
+	} else {
+		result.Status = "up"
+	}
+
+	// Add log metrics as metadata
+	result.Metadata = map[string]interface{}{
+		"total_requests":    metrics.TotalRequests,
+		"error_requests":    metrics.ErrorRequests,
+		"error_rate":        metrics.ErrorRate,
+		"avg_response_time": metrics.AvgResponseTime,
+		"requests_per_min":  metrics.RequestsPerMinute,
+		"status_codes":      metrics.StatusCodes,
+		"top_errors":        metrics.TopErrors,
+		"analysis_duration": duration.Milliseconds(),
+		"log_file":          logConfig.FilePath,
+		"lines_analyzed":    metrics.LinesAnalyzed,
+	}
+
+	return result
+}
+
+// LogMetrics represents aggregated metrics from log analysis
+type LogMetrics struct {
+	TotalRequests     int         `json:"total_requests"`
+	ErrorRequests     int         `json:"error_requests"`
+	ErrorRate         float64     `json:"error_rate"`
+	AvgResponseTime   float64     `json:"avg_response_time"`
+	RequestsPerMinute float64     `json:"requests_per_minute"`
+	StatusCodes       map[int]int `json:"status_codes"`
+	TopErrors         []string    `json:"top_errors"`
+	LinesAnalyzed     int         `json:"lines_analyzed"`
+}
+
+// analyzeLogFile analyzes a log file and returns aggregated metrics
+func (ts *TaskScheduler) analyzeLogFile(config models.LogMonitorConfig, timeout time.Duration) (*LogMetrics, error) {
+	file, err := os.Open(config.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %s: %w", config.FilePath, err)
+	}
+	defer file.Close()
+
+	// Get file info to seek to end for tailing
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	// Seek to appropriate position for tailing
+	var startPos int64
+	if config.TailLines > 0 {
+		// Estimate position based on average line length (assumption: ~200 chars per line)
+		avgLineLength := int64(200)
+		estimatedBytes := int64(config.TailLines) * avgLineLength
+		if estimatedBytes < fileInfo.Size() {
+			startPos = fileInfo.Size() - estimatedBytes
+		}
+	}
+
+	if _, err := file.Seek(startPos, 0); err != nil {
+		return nil, fmt.Errorf("failed to seek in file: %w", err)
+	}
+
+	// Initialize metrics
+	metrics := &LogMetrics{
+		StatusCodes: make(map[int]int),
+		TopErrors:   make([]string, 0),
+	}
+
+	// Set up parser based on format
+	parser, err := ts.createLogParser(config.Format, config.Pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create log parser: %w", err)
+	}
+
+	// Analyze log entries
+	scanner := bufio.NewScanner(file)
+	timeWindow := 5 * time.Minute // Analyze last 5 minutes of logs
+	cutoffTime := time.Now().Add(-timeWindow)
+
+	var totalResponseTime float64
+	var responseTimeCount int
+	errorMessages := make(map[string]int)
+
+	// Context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("log analysis timed out")
+		default:
+		}
+
+		line := scanner.Text()
+		metrics.LinesAnalyzed++
+
+		entry, err := parser(line)
+		if err != nil {
+			// Skip unparseable lines
+			continue
+		}
+
+		// Only analyze recent entries
+		if entry.Timestamp.Before(cutoffTime) {
+			continue
+		}
+
+		metrics.TotalRequests++
+		metrics.StatusCodes[entry.StatusCode]++
+
+		// Check if it's an error
+		isError := false
+		if len(config.ErrorCodes) > 0 {
+			for _, code := range config.ErrorCodes {
+				if entry.StatusCode == code {
+					isError = true
+					break
+				}
+			}
+		} else {
+			// Default: 4xx and 5xx are errors
+			isError = entry.StatusCode >= 400
+		}
+
+		if isError {
+			metrics.ErrorRequests++
+			errorKey := fmt.Sprintf("%d %s", entry.StatusCode, entry.URL)
+			errorMessages[errorKey]++
+		}
+
+		// Track response times
+		if entry.ResponseTime > 0 {
+			totalResponseTime += entry.ResponseTime
+			responseTimeCount++
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading log file: %w", err)
+	}
+
+	// Calculate final metrics
+	if metrics.TotalRequests > 0 {
+		metrics.ErrorRate = (float64(metrics.ErrorRequests) / float64(metrics.TotalRequests)) * 100.0
+		metrics.RequestsPerMinute = float64(metrics.TotalRequests) / timeWindow.Minutes()
+	}
+
+	if responseTimeCount > 0 {
+		metrics.AvgResponseTime = totalResponseTime / float64(responseTimeCount)
+	}
+
+	// Get top errors
+	type errorCount struct {
+		message string
+		count   int
+	}
+	var errors []errorCount
+	for msg, count := range errorMessages {
+		errors = append(errors, errorCount{msg, count})
+	}
+
+	// Sort by count (simple bubble sort for small datasets)
+	for i := 0; i < len(errors)-1; i++ {
+		for j := 0; j < len(errors)-i-1; j++ {
+			if errors[j].count < errors[j+1].count {
+				errors[j], errors[j+1] = errors[j+1], errors[j]
+			}
+		}
+	}
+
+	// Take top 5 errors
+	maxErrors := 5
+	if len(errors) < maxErrors {
+		maxErrors = len(errors)
+	}
+	for i := 0; i < maxErrors; i++ {
+		metrics.TopErrors = append(metrics.TopErrors, fmt.Sprintf("%s (%d times)", errors[i].message, errors[i].count))
+	}
+
+	return metrics, nil
+}
+
+// createLogParser creates a parser function for the specified log format
+func (ts *TaskScheduler) createLogParser(format, customPattern string) (func(string) (*models.LogEntry, error), error) {
+	switch format {
+	case "nginx":
+		return ts.parseNginxLog, nil
+	case "apache", "combined":
+		return ts.parseApacheLog, nil
+	case "json":
+		return ts.parseJSONLog, nil
+	case "custom":
+		if customPattern == "" {
+			return nil, fmt.Errorf("custom pattern required for custom format")
+		}
+		regex, err := regexp.Compile(customPattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid custom pattern: %w", err)
+		}
+		return func(line string) (*models.LogEntry, error) {
+			return ts.parseCustomLog(line, regex)
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported log format: %s", format)
+	}
+}
+
+// parseNginxLog parses nginx access log format
+func (ts *TaskScheduler) parseNginxLog(line string) (*models.LogEntry, error) {
+	// Nginx log format: $remote_addr - $remote_user [$time_local] "$request" $status $bytes_sent "$http_referer" "$http_user_agent" $request_time
+	regex := regexp.MustCompile(`^(\S+) \S+ \S+ \[([^\]]+)\] "([^"]*)" (\d+) (\d+) "([^"]*)" "([^"]*)"(?: ([0-9.]+))?`)
+	matches := regex.FindStringSubmatch(line)
+
+	if len(matches) < 8 {
+		return nil, fmt.Errorf("failed to parse nginx log line")
+	}
+
+	entry := &models.LogEntry{
+		RemoteAddr: matches[1],
+		RawLine:    line,
+	}
+
+	// Parse timestamp
+	if timestamp, err := time.Parse("02/Jan/2006:15:04:05 -0700", matches[2]); err == nil {
+		entry.Timestamp = timestamp
+	} else {
+		entry.Timestamp = time.Now() // Fallback to current time
+	}
+
+	// Parse request
+	requestParts := strings.Fields(matches[3])
+	if len(requestParts) >= 2 {
+		entry.Method = requestParts[0]
+		entry.URL = requestParts[1]
+	}
+
+	// Parse status code
+	if statusCode, err := strconv.Atoi(matches[4]); err == nil {
+		entry.StatusCode = statusCode
+	}
+
+	// Parse bytes sent
+	if bytesSent, err := strconv.ParseInt(matches[5], 10, 64); err == nil {
+		entry.BytesSent = bytesSent
+	}
+
+	// Parse referrer and user agent
+	entry.Referrer = matches[6]
+	entry.UserAgent = matches[7]
+
+	// Parse response time (if available)
+	if len(matches) > 8 && matches[8] != "" {
+		if responseTime, err := strconv.ParseFloat(matches[8], 64); err == nil {
+			entry.ResponseTime = responseTime * 1000 // Convert to milliseconds
+		}
+	}
+
+	return entry, nil
+}
+
+// parseApacheLog parses Apache combined log format
+func (ts *TaskScheduler) parseApacheLog(line string) (*models.LogEntry, error) {
+	// Apache combined log format: %h %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"
+	regex := regexp.MustCompile(`^(\S+) \S+ \S+ \[([^\]]+)\] "([^"]*)" (\d+) (\d+) "([^"]*)" "([^"]*)"`)
+	matches := regex.FindStringSubmatch(line)
+
+	if len(matches) < 8 {
+		return nil, fmt.Errorf("failed to parse apache log line")
+	}
+
+	entry := &models.LogEntry{
+		RemoteAddr: matches[1],
+		RawLine:    line,
+	}
+
+	// Parse timestamp
+	if timestamp, err := time.Parse("02/Jan/2006:15:04:05 -0700", matches[2]); err == nil {
+		entry.Timestamp = timestamp
+	} else {
+		entry.Timestamp = time.Now()
+	}
+
+	// Parse request
+	requestParts := strings.Fields(matches[3])
+	if len(requestParts) >= 2 {
+		entry.Method = requestParts[0]
+		entry.URL = requestParts[1]
+	}
+
+	// Parse status code
+	if statusCode, err := strconv.Atoi(matches[4]); err == nil {
+		entry.StatusCode = statusCode
+	}
+
+	// Parse bytes sent
+	if bytesSent, err := strconv.ParseInt(matches[5], 10, 64); err == nil {
+		entry.BytesSent = bytesSent
+	}
+
+	// Parse referrer and user agent
+	entry.Referrer = matches[6]
+	entry.UserAgent = matches[7]
+
+	return entry, nil
+}
+
+// parseJSONLog parses JSON-formatted log entries
+func (ts *TaskScheduler) parseJSONLog(line string) (*models.LogEntry, error) {
+	var entry models.LogEntry
+	if err := json.Unmarshal([]byte(line), &entry); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON log: %w", err)
+	}
+	entry.RawLine = line
+	return &entry, nil
+}
+
+// parseCustomLog parses log using custom regex pattern
+func (ts *TaskScheduler) parseCustomLog(line string, regex *regexp.Regexp) (*models.LogEntry, error) {
+	matches := regex.FindStringSubmatch(line)
+	if len(matches) < 2 {
+		return nil, fmt.Errorf("custom pattern did not match")
+	}
+
+	entry := &models.LogEntry{
+		RawLine:   line,
+		Timestamp: time.Now(), // Default to current time
+	}
+
+	// Try to extract common fields from named groups
+	groupNames := regex.SubexpNames()
+	for i, match := range matches {
+		if i == 0 || match == "" {
+			continue
+		}
+
+		groupName := groupNames[i]
+		switch groupName {
+		case "timestamp":
+			// Try common timestamp formats
+			formats := []string{
+				"02/Jan/2006:15:04:05 -0700",
+				"2006-01-02T15:04:05Z07:00",
+				"2006-01-02 15:04:05",
+			}
+			for _, format := range formats {
+				if t, err := time.Parse(format, match); err == nil {
+					entry.Timestamp = t
+					break
+				}
+			}
+		case "method":
+			entry.Method = match
+		case "url":
+			entry.URL = match
+		case "status_code":
+			if code, err := strconv.Atoi(match); err == nil {
+				entry.StatusCode = code
+			}
+		case "response_time":
+			if rt, err := strconv.ParseFloat(match, 64); err == nil {
+				entry.ResponseTime = rt
+			}
+		case "remote_addr":
+			entry.RemoteAddr = match
+		case "user_agent":
+			entry.UserAgent = match
+		case "referrer":
+			entry.Referrer = match
+		}
+	}
+
+	return entry, nil
 }
 
 // requestTasksViaWebSocket requests monitoring tasks via WebSocket
@@ -1217,6 +1662,8 @@ func (a *Agent) logTaskSummary(tasks []models.MonitorTask, isInitial bool) {
 			logEvent = logEvent.Int("ping_targets", count)
 		case "tcp":
 			logEvent = logEvent.Int("tcp_services", count)
+		case "log":
+			logEvent = logEvent.Int("log_files", count)
 		default:
 			logEvent = logEvent.Int(fmt.Sprintf("%s_resources", taskType), count)
 		}
@@ -1236,6 +1683,8 @@ func (a *Agent) logTaskSummary(tasks []models.MonitorTask, isInitial bool) {
 			emoji = "📡"
 		case "tcp":
 			emoji = "🔌"
+		case "log":
+			emoji = "📄"
 		}
 
 		log.Info().
@@ -1279,4 +1728,9 @@ func (a *Agent) logTaskUpdates(newTasks []models.MonitorTask, oldTaskCount int) 
 			Int("total_tasks", newTaskCount).
 			Msg("Monitoring task configuration changed")
 	}
+}
+
+// parseDuration parses duration strings like "30s", "2m", "1h"
+func parseDuration(s string) (time.Duration, error) {
+	return time.ParseDuration(s)
 }

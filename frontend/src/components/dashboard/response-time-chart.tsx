@@ -356,12 +356,12 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
               <CardDescription>
                 {chartMode === 'response_time' ? (
                   selectedSites.includes('all') 
-                    ? `Average response time across all resources`
-                    : `Response time for ${selectedSites.length} selected resource${selectedSites.length !== 1 ? 's' : ''}`
+                    ? `Average response time across all resources (HTTP/HTTPS/Ping/Log)`
+                    : `Response time for ${selectedSites.length} selected resource${selectedSites.length > 1 ? 's' : ''}`
                 ) : (
                   selectedSites.includes('all')
-                    ? `Error rate across all resources (HTTP 4xx/5xx, ping failures)`
-                    : `Error rate for ${selectedSites.length} selected resource${selectedSites.length !== 1 ? 's' : ''}`
+                    ? `Error rate across all resources (HTTP 4xx/5xx responses, ping failures, log errors)`
+                    : `Error rate for ${selectedSites.length} selected resource${selectedSites.length > 1 ? 's' : ''}`
                 )}
               </CardDescription>
             </div>

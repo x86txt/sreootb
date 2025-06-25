@@ -1,5 +1,35 @@
 const API_BASE = '/api';
 
+// Helper function to provide better error messages for fetch failures
+function createFetchError(originalError: string, context?: string): Error {
+  let message = originalError;
+  
+  // Check if it's a typical fetch failure (network error)
+  if (originalError.includes('Failed to fetch') || originalError.includes('fetch')) {
+    message = `${originalError}\n\nℹ️  Is the backend server running?\n   Try: sreootb server --bind 0.0.0.0:8080\n   Or:  sreootb standalone`;
+    
+    if (context) {
+      message = `${context}: ${message}`;
+    }
+  }
+  
+  return new Error(message);
+}
+
+// Helper function for making API requests with better error handling
+async function apiRequest(url: string, options?: RequestInit): Promise<Response> {
+  try {
+    const response = await fetch(url, options);
+    return response;
+  } catch (error) {
+    // Network error (server not running, connection refused, etc.)
+    throw createFetchError(
+      error instanceof Error ? error.message : 'Network request failed',
+      `Connection to ${url} failed`
+    );
+  }
+}
+
 export interface Site {
   id: number;
   url: string;
@@ -94,19 +124,19 @@ export interface SiteAnalytics {
 }
 
 export async function getSites(): Promise<Site[]> {
-  const response = await fetch(`${API_BASE}/sites`);
+  const response = await apiRequest(`${API_BASE}/sites`);
   if (!response.ok) throw new Error('Failed to fetch sites');
   return response.json();
 }
 
 export async function getSitesStatus(): Promise<SiteStatus[]> {
-  const response = await fetch(`${API_BASE}/sites/status`);
+  const response = await apiRequest(`${API_BASE}/sites/status`);
   if (!response.ok) throw new Error('Failed to fetch sites status');
   return response.json();
 }
 
 export async function createSite(site: CreateSiteRequest): Promise<{ id: number; message: string }> {
-  const response = await fetch(`${API_BASE}/sites`, {
+  const response = await apiRequest(`${API_BASE}/sites`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -121,7 +151,7 @@ export async function createSite(site: CreateSiteRequest): Promise<{ id: number;
 }
 
 export async function deleteSite(siteId: number): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE}/sites/${siteId}`, {
+  const response = await apiRequest(`${API_BASE}/sites/${siteId}`, {
     method: 'DELETE',
   });
   if (!response.ok) {
@@ -132,19 +162,19 @@ export async function deleteSite(siteId: number): Promise<{ message: string }> {
 }
 
 export async function getSiteHistory(siteId: number, limit = 100): Promise<SiteCheck[]> {
-  const response = await fetch(`${API_BASE}/sites/${siteId}/history?limit=${limit}`);
+  const response = await apiRequest(`${API_BASE}/sites/${siteId}/history?limit=${limit}`);
   if (!response.ok) throw new Error('Failed to fetch site history');
   return response.json();
 }
 
 export async function getMonitorStats(): Promise<MonitorStats> {
-  const response = await fetch(`${API_BASE}/stats`);
+  const response = await apiRequest(`${API_BASE}/stats`);
   if (!response.ok) throw new Error('Failed to fetch monitor stats');
   return response.json();
 }
 
 export async function triggerManualCheck(): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE}/check/manual`, {
+  const response = await apiRequest(`${API_BASE}/check/manual`, {
     method: 'POST',
   });
   if (!response.ok) {
@@ -155,7 +185,7 @@ export async function triggerManualCheck(): Promise<{ message: string }> {
 }
 
 export async function getAppConfig(): Promise<AppConfig> {
-  const response = await fetch(`${API_BASE}/config`);
+  const response = await apiRequest(`${API_BASE}/config`);
   if (!response.ok) throw new Error('Failed to fetch app configuration');
   return response.json();
 }
@@ -176,7 +206,7 @@ export async function getSitesAnalytics(
     params.append('site_ids', 'all');
   }
   
-  const response = await fetch(`${API_BASE}/sites/analytics?${params}`);
+  const response = await apiRequest(`${API_BASE}/sites/analytics?${params}`);
   if (!response.ok) throw new Error('Failed to fetch sites analytics');
   return response.json();
 }

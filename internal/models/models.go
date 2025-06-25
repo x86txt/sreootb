@@ -296,13 +296,39 @@ type MonitorStats struct {
 type MonitorTask struct {
 	ID          int       `json:"id" db:"id"`
 	SiteID      int       `json:"site_id" db:"site_id"`
-	MonitorType string    `json:"monitor_type" db:"monitor_type"` // "http", "ping", "tcp", etc.
-	URL         string    `json:"url" db:"url"`                   // URL or host to monitor
+	MonitorType string    `json:"monitor_type" db:"monitor_type"` // "http", "ping", "tcp", "log", etc.
+	URL         string    `json:"url" db:"url"`                   // URL or host to monitor (for log type: file path)
 	Interval    string    `json:"interval" db:"interval"`         // e.g., "60s", "2m", "5m"
 	Timeout     string    `json:"timeout" db:"timeout"`           // e.g., "10s", "30s"
 	Enabled     bool      `json:"enabled" db:"enabled"`
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+	// Configuration for log monitoring (stored as JSON in metadata)
+	LogConfig *LogMonitorConfig `json:"log_config,omitempty" db:"-"`
+}
+
+// LogMonitorConfig represents configuration for log file monitoring
+type LogMonitorConfig struct {
+	FilePath   string `json:"file_path"`             // Path to log file
+	Format     string `json:"format"`                // "nginx", "apache", "combined", "json", "custom"
+	Pattern    string `json:"pattern,omitempty"`     // Custom regex pattern for parsing
+	ErrorCodes []int  `json:"error_codes,omitempty"` // HTTP status codes to consider as errors (default: 400-599)
+	TailLines  int    `json:"tail_lines"`            // Number of lines to tail from end (default: 1000)
+	Encoding   string `json:"encoding"`              // File encoding (default: "utf-8")
+}
+
+// LogEntry represents a parsed log entry
+type LogEntry struct {
+	Timestamp    time.Time `json:"timestamp"`
+	Method       string    `json:"method,omitempty"`
+	URL          string    `json:"url,omitempty"`
+	StatusCode   int       `json:"status_code"`
+	ResponseTime float64   `json:"response_time,omitempty"` // in milliseconds
+	RemoteAddr   string    `json:"remote_addr,omitempty"`
+	UserAgent    string    `json:"user_agent,omitempty"`
+	Referrer     string    `json:"referrer,omitempty"`
+	BytesSent    int64     `json:"bytes_sent,omitempty"`
+	RawLine      string    `json:"raw_line"`
 }
 
 // MonitorResult represents the result of a monitoring check performed by an agent

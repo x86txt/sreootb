@@ -16,15 +16,13 @@
 - **Authentication**: Email/password with bcrypt, optional TOTP 2FA, session-based auth
 
 ### Core Features
-- **User Authentication**: Email/password registration, email verification, optional TOTP 2FA
-- **Session Management**: Secure token-based sessions with expiration
-- **Master Key Access**: Emergency API key access preserved for troubleshooting
-- **Monitoring Types**: HTTP/HTTPS and ping monitoring
+- **Monitoring Types**: HTTP/HTTPS, ping, and log file monitoring
 - **Agent Support**: Distributed monitoring across different networks
 - **Auto-TLS**: Automatic ed25519 certificate generation
 - **Real-time Updates**: WebSocket connections for live dashboard updates
 - **REST API**: Complete API for automation and integration
 - **High Availability**: CockroachDB cluster support for production
+- **Log Analysis**: Real-time nginx/apache/custom log monitoring with error tracking
 
 ## Project Structure
 
@@ -136,7 +134,59 @@ The agent system is the primary focus of development work:
 ### Monitoring Types
 - **HTTP/HTTPS**: Web service monitoring with response time and status codes
 - **Ping**: ICMP network connectivity testing
-- Support for custom protocols via URL schemes (http://, https://, ping://)
+- **Log File**: Real-time log file analysis for nginx/apache/custom logs
+- Support for custom protocols via URL schemes (http://, https://, ping://, log://)
+
+## Log File Monitoring Features
+
+### Supported Log Formats
+- **Nginx Access Logs**: Standard nginx log format with response times
+- **Apache Combined Logs**: Standard apache combined log format
+- **JSON Logs**: Structured JSON log entries
+- **Custom Formats**: Define custom regex patterns for parsing
+
+### Metrics Tracked
+- **Request Rate**: Requests per minute based on log entries
+- **Error Rate**: Percentage of 4xx/5xx responses (configurable)
+- **Response Time**: Average response time (if available in logs)
+- **Status Code Distribution**: Breakdown of HTTP status codes
+- **Top Errors**: Most frequent error requests
+
+### Usage Examples
+
+#### Simple Log Monitoring
+```bash
+# Add via frontend: 
+# Name: "Nginx Access Log"
+# Type: "Log File"
+# Path: "/var/log/nginx/access.log"
+```
+
+#### Advanced Configuration (JSON)
+```json
+{
+  "file_path": "/var/log/nginx/access.log",
+  "format": "nginx",
+  "tail_lines": 5000,
+  "error_codes": [400, 401, 403, 404, 500, 502, 503, 504],
+  "encoding": "utf-8"
+}
+```
+
+#### Custom Log Format
+```json
+{
+  "file_path": "/var/log/app/custom.log",
+  "format": "custom",
+  "pattern": "(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) (?P<method>\\w+) (?P<url>\\S+) (?P<status_code>\\d+) (?P<response_time>[0-9.]+)",
+  "tail_lines": 2000
+}
+```
+
+### Log Monitoring Status Logic
+- **Up**: Error rate ≤ 20%
+- **Degraded**: Error rate 20-50%
+- **Down**: Error rate > 50% or file access errors
 
 ## CLI Commands
 

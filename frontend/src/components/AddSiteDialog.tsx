@@ -149,6 +149,11 @@ export function AddSiteDialog({ open, onOpenChange, onSiteAdded }: AddSiteDialog
         // For ping, remove any protocol and just use the domain/IP
         processedUrl = processedUrl.replace(/^https?:\/\//, '');
         processedUrl = `ping://${processedUrl}`;
+      } else if (monitorType === 'log') {
+        // For log monitoring, ensure it starts with log://
+        if (!processedUrl.startsWith('log://')) {
+          processedUrl = `log://${processedUrl}`;
+        }
       } else {
         // For HTTP/HTTPS, ensure proper protocol
         if (!processedUrl.startsWith('http://') && !processedUrl.startsWith('https://')) {
@@ -223,7 +228,7 @@ export function AddSiteDialog({ open, onOpenChange, onSiteAdded }: AddSiteDialog
         <DialogHeader>
           <DialogTitle>Add New Site</DialogTitle>
           <DialogDescription>
-            Add a website or server to monitor using HTTP, HTTPS, or ping monitoring.
+            Add a website, server, or log file to monitor using HTTP, HTTPS, ping, or log file monitoring.
           </DialogDescription>
         </DialogHeader>
         
@@ -255,20 +260,24 @@ export function AddSiteDialog({ open, onOpenChange, onSiteAdded }: AddSiteDialog
                 <SelectItem value="https">HTTPS - Secure web monitoring</SelectItem>
                 <SelectItem value="http">HTTP - Standard web monitoring</SelectItem>
                 <SelectItem value="ping">Ping - Network connectivity check</SelectItem>
+                <SelectItem value="log">Log File - Monitor nginx/apache/custom logs</SelectItem>
               </SelectContent>
             </Select>
           </div>
           
           <div className="space-y-2">
             <label htmlFor="url" className="text-sm font-medium">
-              {monitorType === 'ping' ? 'Domain/IP Address' : 'URL'}
+              {monitorType === 'ping' ? 'Domain/IP Address' : 
+               monitorType === 'log' ? 'Log File Path' : 'URL'}
             </label>
             <Input
               id="url"
-              type={monitorType === 'ping' ? 'text' : 'url'}
+              type={monitorType === 'ping' ? 'text' : monitorType === 'log' ? 'text' : 'url'}
               placeholder={
                 monitorType === 'ping' 
                   ? 'e.g., example.com or 8.8.8.8' 
+                  : monitorType === 'log'
+                  ? 'e.g., /var/log/nginx/access.log'
                   : `e.g., ${monitorType}://example.com`
               }
               value={url}
@@ -276,6 +285,12 @@ export function AddSiteDialog({ open, onOpenChange, onSiteAdded }: AddSiteDialog
               disabled={isLoading}
               tabIndex={3}
             />
+            {monitorType === 'log' && (
+              <p className="text-xs text-muted-foreground">
+                Enter the full path to your log file. Supports nginx, apache, and JSON formats.
+                Example: /var/log/nginx/access.log
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">
