@@ -1118,12 +1118,20 @@ func (ts *TaskScheduler) executeLogCheck(timeout time.Duration) models.MonitorRe
 		result.Status = "down"
 		errorMsg := fmt.Sprintf("High error rate: %.2f%%", metrics.ErrorRate)
 		result.ErrorMessage = &errorMsg
+		log.Debug().Float64("error_rate", metrics.ErrorRate).Msg("Log status: DOWN - high error rate")
 	} else if metrics.ErrorRate > 20.0 { // More than 20% errors
 		result.Status = "degraded"
 		errorMsg := fmt.Sprintf("Elevated error rate: %.2f%%", metrics.ErrorRate)
 		result.ErrorMessage = &errorMsg
+		log.Debug().Float64("error_rate", metrics.ErrorRate).Msg("Log status: DEGRADED - elevated error rate")
+	} else if metrics.TotalRequests == 0 {
+		result.Status = "down"
+		errorMsg := "No recent log entries found"
+		result.ErrorMessage = &errorMsg
+		log.Debug().Msg("Log status: DOWN - no recent entries")
 	} else {
 		result.Status = "up"
+		log.Debug().Float64("error_rate", metrics.ErrorRate).Int("total_requests", metrics.TotalRequests).Msg("Log status: UP")
 	}
 
 	// Add log metrics as metadata
@@ -1240,6 +1248,13 @@ func (ts *TaskScheduler) analyzeLogFile(config models.LogMonitorConfig, timeout 
 			log.Debug().Err(err).Str("line", line).Msg("Failed to parse log line")
 			continue
 		}
+
+		log.Debug().
+			Time("parsed_timestamp", entry.Timestamp).
+			Int("status_code", entry.StatusCode).
+			Str("method", entry.Method).
+			Str("url", entry.URL).
+			Msg("Successfully parsed log entry")
 
 		// Only analyze recent entries
 		if entry.Timestamp.Before(cutoffTime) {

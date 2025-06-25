@@ -1203,10 +1203,32 @@ func (db *DB) RecordMonitorResult(result *models.MonitorResultRequest, agentID i
 		}
 	}
 
+	// Verify the task exists before trying to insert
+	var taskExists bool
+	taskCheckQuery := `SELECT EXISTS(SELECT 1 FROM monitor_tasks WHERE id = ?)`
+	err := db.conn.QueryRow(taskCheckQuery, result.TaskID).Scan(&taskExists)
+	if err != nil {
+		return fmt.Errorf("failed to check if task exists: %w", err)
+	}
+	if !taskExists {
+		return fmt.Errorf("task_id %d does not exist in monitor_tasks table", result.TaskID)
+	}
+
+	// Verify the agent exists before trying to insert
+	var agentExists bool
+	agentCheckQuery := `SELECT EXISTS(SELECT 1 FROM agents WHERE id = ?)`
+	err = db.conn.QueryRow(agentCheckQuery, agentID).Scan(&agentExists)
+	if err != nil {
+		return fmt.Errorf("failed to check if agent exists: %w", err)
+	}
+	if !agentExists {
+		return fmt.Errorf("agent_id %d does not exist in agents table", agentID)
+	}
+
 	query := `INSERT INTO monitor_results (task_id, agent_id, status, response_time, status_code, error_message, metadata, checked_at) 
 			  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
-	_, err := db.conn.Exec(query, result.TaskID, agentID, result.Status, result.ResponseTime, result.StatusCode, result.ErrorMessage, metadataJSON, result.CheckedAt)
+	_, err = db.conn.Exec(query, result.TaskID, agentID, result.Status, result.ResponseTime, result.StatusCode, result.ErrorMessage, metadataJSON, result.CheckedAt)
 	if err != nil {
 		return fmt.Errorf("failed to record monitoring result: %w", err)
 	}
