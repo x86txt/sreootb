@@ -35,8 +35,23 @@ const CHART_COLORS = [
 ];
 
 export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
-  const [selectedSites, setSelectedSites] = useState<string[]>(['all']);
-  const [timeRange, setTimeRange] = useState('0.0833');
+  // Load selections from localStorage on component mount
+  const [selectedSites, setSelectedSites] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('sreootb-chart-selected-sites');
+      return saved ? JSON.parse(saved) : ['all'];
+    }
+    return ['all'];
+  });
+  
+  const [timeRange, setTimeRange] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('sreootb-chart-time-range');
+      return saved || '0.0833';
+    }
+    return '0.0833';
+  });
+  
   const [customTimeInput, setCustomTimeInput] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [analyticsData, setAnalyticsData] = useState<SiteAnalytics | null>(null);
@@ -53,10 +68,27 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
 
   const formatResponseTime = (value: number | null | undefined): string => {
     if (value === null || value === undefined) return 'No data';
-    if (value < 1) {
-      return `${value.toFixed(2)}ms`;
+    
+    // Handle unit conversion: backend may send seconds (old monitor) or milliseconds (agent-based)
+    // Values >= 1 are likely seconds, values < 1 could be either seconds or milliseconds
+    // We'll convert based on magnitude - if < 1 and seems too small, treat as seconds
+    let milliseconds: number;
+    
+    if (value >= 1) {
+      // Definitely seconds (e.g., 1.234 seconds)
+      milliseconds = value * 1000;
+    } else if (value > 0.001) {
+      // Likely seconds (e.g., 0.066 seconds = 66ms)
+      milliseconds = value * 1000;
+    } else {
+      // Likely already in milliseconds or very fast response
+      milliseconds = value;
     }
-    return `${Math.round(value)}ms`;
+    
+    if (milliseconds < 1) {
+      return `${milliseconds.toFixed(2)}ms`;
+    }
+    return `${Math.round(milliseconds)}ms`;
   };
 
   const parseCustomTimeToHours = (timeStr: string): number | null => {
@@ -207,36 +239,44 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
   const handleSiteSelectionChange = (selected: string[]) => {
     console.log('Site selection change:', { selected, currentSelectedSites: selectedSites });
     
+    let newSelection: string[];
+    
     if (selected.length === 0) {
       console.log('No selections, defaulting to all');
-      setSelectedSites(['all']);
-      return;
-    }
-
-    // If "all" was just added, clear individual selections
-    if (selected.includes('all') && !selectedSites.includes('all')) {
+      newSelection = ['all'];
+    } else if (selected.includes('all') && !selectedSites.includes('all')) {
+      // "All Resources" was just selected, clear individual selections
       console.log('All option selected, clearing individual selections');
-      setSelectedSites(['all']);
-      return;
+      newSelection = ['all'];
+    } else if (selected.includes('all') && selected.length > 1) {
+      // "All Resources" is selected along with individual sites - remove "All Resources"
+      console.log('Individual sites selected, removing "All Resources"');
+      newSelection = selected.filter(site => site !== 'all');
+    } else {
+      // Normal selection handling
+      console.log('Normal selection handling:', selected);
+      newSelection = selected;
     }
-
-    // If switching from "all" to individual selections, accept all the new selections
-    if (selectedSites.includes('all') && !selected.includes('all')) {
-      console.log('Switching from all to individual selections:', selected);
-      setSelectedSites(selected);
-      return;
+    
+    // Update state and save to localStorage
+    setSelectedSites(newSelection);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('sreootb-chart-selected-sites', JSON.stringify(newSelection));
     }
+  };
 
-    // If "all" is being deselected, keep only individual sites
-    if (!selected.includes('all') && selectedSites.includes('all')) {
-      console.log('All deselected, keeping individual sites');
-      setSelectedSites(selected.filter(site => site !== 'all'));
-      return;
+  // Save timeRange changes to localStorage
+  const handleTimeRangeChange = (value: string) => {
+    setTimeRange(value);
+    setShowCustomInput(value === 'custom');
+    if (value !== 'custom') {
+      setCustomTimeInput('');
     }
-
-    // Normal selection handling - accept whatever was selected
-    console.log('Normal selection handling:', selected);
-    setSelectedSites(selected);
+    
+    // Save to localStorage
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('sreootb-chart-time-range', value);
+    }
   };
 
   const getAverageResponseTime = () => {
@@ -330,13 +370,7 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
           <div className="flex-1"></div>
           <div className="sm:w-48">
             <label className="text-sm font-medium mb-2 block">Time Range</label>
-            <Select value={timeRange} onValueChange={(value) => {
-              setTimeRange(value);
-              setShowCustomInput(value === 'custom');
-              if (value !== 'custom') {
-                setCustomTimeInput('');
-              }
-            }}>
+            <Select value={timeRange} onValueChange={handleTimeRangeChange}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>

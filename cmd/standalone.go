@@ -28,7 +28,10 @@ var standaloneCmd = &cobra.Command{
 This is perfect for simple deployments where you want both monitoring server and a local monitoring agent.
 
 The server will use SQLite database and the local agent will automatically connect to the server
-using an internally generated API key. This provides an "out of the box" monitoring solution.`,
+using an internally generated API key. This provides an "out of the box" monitoring solution.
+
+If you encounter issues with the local agent showing as offline, use --clean-start to remove
+old data files and start fresh.`,
 	RunE: runStandalone,
 }
 
@@ -61,6 +64,7 @@ func init() {
 	standaloneCmd.Flags().String("min-scan-interval", "10s", "minimum allowed scan interval")
 	standaloneCmd.Flags().String("max-scan-interval", "24h", "maximum allowed scan interval")
 	standaloneCmd.Flags().Bool("dev-mode", false, "enable development mode")
+	standaloneCmd.Flags().String("accent-color", "#E11D48", "custom accent color (hex code, e.g., #E11D48)")
 
 	// Agent-specific flags
 	standaloneCmd.Flags().String("agent-bind", "127.0.0.1:8082", "address to bind the agent health endpoint")
@@ -70,6 +74,7 @@ func init() {
 	// Config generation flags
 	standaloneCmd.Flags().Bool("gen-config", false, "generate sample standalone configuration file")
 	standaloneCmd.Flags().Bool("gen-systemd", false, "generate systemd service file for standalone")
+	standaloneCmd.Flags().Bool("clean-start", false, "remove old data (database, certificates, keys) before starting")
 
 	// Bind server flags to viper with standalone prefix
 	viper.BindPFlag("standalone.server.bind", standaloneCmd.Flags().Lookup("bind"))
@@ -97,6 +102,7 @@ func init() {
 	viper.BindPFlag("standalone.server.min_scan_interval", standaloneCmd.Flags().Lookup("min-scan-interval"))
 	viper.BindPFlag("standalone.server.max_scan_interval", standaloneCmd.Flags().Lookup("max-scan-interval"))
 	viper.BindPFlag("standalone.server.dev_mode", standaloneCmd.Flags().Lookup("dev-mode"))
+	viper.BindPFlag("standalone.server.accent_color", standaloneCmd.Flags().Lookup("accent-color"))
 
 	// Bind agent flags
 	viper.BindPFlag("standalone.agent.bind", standaloneCmd.Flags().Lookup("agent-bind"))
@@ -108,6 +114,7 @@ func runStandalone(cmd *cobra.Command, args []string) error {
 	// Check for config generation flags first
 	genConfig, _ := cmd.Flags().GetBool("gen-config")
 	genSystemd, _ := cmd.Flags().GetBool("gen-systemd")
+	cleanStart, _ := cmd.Flags().GetBool("clean-start")
 
 	if genConfig {
 		return generateStandaloneConfig()
@@ -115,6 +122,28 @@ func runStandalone(cmd *cobra.Command, args []string) error {
 
 	if genSystemd {
 		return generateStandaloneSystemd()
+	}
+
+	// Clean start: remove old data to prevent conflicts
+	if cleanStart {
+		log.Info().Msg("Clean start requested - removing old data directories")
+
+		// Remove database directory
+		if err := os.RemoveAll("./db"); err != nil && !os.IsNotExist(err) {
+			log.Warn().Err(err).Msg("Failed to remove database directory")
+		}
+
+		// Remove certificates directory
+		if err := os.RemoveAll("./certs"); err != nil && !os.IsNotExist(err) {
+			log.Warn().Err(err).Msg("Failed to remove certificates directory")
+		}
+
+		// Remove agent API key file
+		if err := os.Remove("agent-api.key"); err != nil && !os.IsNotExist(err) {
+			log.Warn().Err(err).Msg("Failed to remove agent API key file")
+		}
+
+		log.Info().Msg("Clean start completed - old data removed")
 	}
 
 	log.Info().Msg("Starting SREootb in standalone mode (server + local agent)")
@@ -226,6 +255,7 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 	minScanIntervalStr, _ := cmd.Flags().GetString("min-scan-interval")
 	maxScanIntervalStr, _ := cmd.Flags().GetString("max-scan-interval")
 	devMode, _ := cmd.Flags().GetBool("dev-mode")
+	accentColor, _ := cmd.Flags().GetString("accent-color")
 
 	// Agent flags
 	agentBind, _ := cmd.Flags().GetString("agent-bind")
@@ -289,6 +319,7 @@ func createStandaloneConfig(cmd *cobra.Command) (*config.Config, error) {
 			MinScanInterval: minScanInterval,
 			MaxScanInterval: maxScanInterval,
 			DevMode:         devMode,
+			AccentColor:     accentColor,
 		},
 		Agent: config.AgentConfig{
 			ServerURL:     agentServerURL, // Connect to agent API server, not web GUI
@@ -419,6 +450,7 @@ server:
   min_scan_interval: "10s"                 # Minimum allowed scan interval
   max_scan_interval: "24h"                 # Maximum allowed scan interval
   dev_mode: false                          # Development mode
+  accent_color: "#E11D48"                  # Custom accent color (hex code, e.g., #E11D48)
 
 # Local agent configuration (connects to local server)
 agent:

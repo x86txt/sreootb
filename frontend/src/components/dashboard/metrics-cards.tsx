@@ -3,7 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Activity, Clock, TrendingUp, TrendingDown, CheckCircle, XCircle, Globe } from "lucide-react";
 import { type MonitorStats, type SiteStatus } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, formatResponseTime } from "@/lib/utils";
 
 interface MetricsCardsProps {
   stats: MonitorStats | null;
@@ -19,9 +19,20 @@ export function MetricsCards({ stats, sites }: MetricsCardsProps) {
     ? ((stats.sites_up / stats.total_sites) * 100).toFixed(1)
     : "0";
 
-  const avgResponseTimeMs = stats.average_response_time 
-    ? Math.round(stats.average_response_time * 1000)
-    : 0;
+  // Use the same unit conversion logic as the chart component
+  const avgResponseTimeMs = stats.average_response_time ? (() => {
+    const time = stats.average_response_time;
+    if (time >= 1) {
+      // Definitely seconds (e.g., 1.234 seconds)
+      return Math.round(time * 1000);
+    } else if (time > 0.001) {
+      // Likely seconds (e.g., 0.066 seconds = 66ms)
+      return Math.round(time * 1000);
+    } else {
+      // Likely already in milliseconds or very fast response
+      return Math.round(time);
+    }
+  })() : 0;
 
   // Calculate change indicators (you could enhance this with historical data)
   const uptimeChange = parseFloat(uptimePercentage) >= 95 ? "up" : "down";

@@ -33,6 +33,7 @@ type ServerConfig struct {
 	AutoTLS         bool           `mapstructure:"auto_tls"`
 	AdminAPIKey     string         `mapstructure:"admin_api_key"` // Admin API key for web GUI authentication
 	AgentAPIKey     string         `mapstructure:"agent_api_key"` // Agent API key for agent authentication
+	AccentColor     string         `mapstructure:"accent_color"`  // Custom accent color (hex code)
 	MinScanInterval time.Duration  `mapstructure:"min_scan_interval"`
 	MaxScanInterval time.Duration  `mapstructure:"max_scan_interval"`
 	DevMode         bool           `mapstructure:"dev_mode"`

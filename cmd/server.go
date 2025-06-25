@@ -47,6 +47,7 @@ func init() {
 	serverCmd.Flags().String("tls-key", "", "path to TLS private key file")
 	serverCmd.Flags().Bool("auto-tls", false, "enable automatic TLS certificate generation")
 	serverCmd.Flags().Bool("http3", false, "enable HTTP/3 support (requires TLS)")
+	serverCmd.Flags().String("accent-color", "#E11D48", "custom accent color (hex code, e.g., #E11D48)")
 
 	// Database configuration flags
 	serverCmd.Flags().String("db-type", "sqlite", "database type: sqlite or cockroachdb")
@@ -73,6 +74,7 @@ func init() {
 	viper.BindPFlag("server.tls_key", serverCmd.Flags().Lookup("tls-key"))
 	viper.BindPFlag("server.auto_tls", serverCmd.Flags().Lookup("auto-tls"))
 	viper.BindPFlag("server.http3", serverCmd.Flags().Lookup("http3"))
+	viper.BindPFlag("server.accent_color", serverCmd.Flags().Lookup("accent-color"))
 
 	// Bind database flags to viper
 	viper.BindPFlag("server.database.type", serverCmd.Flags().Lookup("db-type"))

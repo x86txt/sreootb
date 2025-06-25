@@ -59,6 +59,7 @@ export interface AppConfig {
     range_description: string;
     development_mode: boolean;
   };
+  accent_color?: string;
 }
 
 export interface CreateSiteRequest {
