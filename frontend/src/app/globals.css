@@ -59,4 +59,22 @@
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
+}
+
+/* Custom animations for dangerous metrics */
+@layer utilities {
+  @keyframes glow-flash {
+    0%, 100% {
+      box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+      transform: scale(1);
+    }
+    50% {
+      box-shadow: 0 10px 40px 0 rgb(0 0 0 / 0.3), 0 20px 60px -10px rgb(0 0 0 / 0.4);
+      transform: scale(1.02);
+    }
+  }
+  
+  .animate-glow-flash {
+    animation: glow-flash 3s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
+  }
 } 

@@ -1,15 +1,15 @@
 "use client";
 
-import { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, AreaChart, Area } from 'recharts';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { MultiSelect } from '@/components/ui/multi-select';
 import { Badge } from '@/components/ui/badge';
-import { Activity, TrendingUp, Trash2, AlertTriangle, Clock } from 'lucide-react';
-import { getSitesAnalytics, type SiteAnalytics, type SiteStatus } from '@/lib/api';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { MultiSelect } from '@/components/ui/multi-select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { getSitesAnalytics, type SiteAnalytics, type SiteStatus } from '@/lib/api';
+import { Activity, AlertTriangle, Clock, Trash2, TrendingUp } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface ResponseTimeChartProps {
   sites: SiteStatus[];
@@ -70,26 +70,11 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
   const formatResponseTime = (value: number | null | undefined): string => {
     if (value === null || value === undefined) return 'No data';
     
-    // Handle unit conversion: backend may send seconds (old monitor) or milliseconds (agent-based)
-    // Values >= 1 are likely seconds, values < 1 could be either seconds or milliseconds  
-    // We'll convert based on magnitude - if < 1 and seems too small, treat as seconds
-    let milliseconds: number;
-    
-    if (value >= 1) {
-      // Definitely seconds (e.g., 1.234 seconds)
-      milliseconds = value * 1000;
-    } else if (value > 0.001) {
-      // Likely seconds (e.g., 0.066 seconds = 66ms)
-      milliseconds = value * 1000;
-    } else {
-      // Likely already in milliseconds or very fast response
-      milliseconds = value;
+    // Values are already in milliseconds from the database
+    if (value < 1) {
+      return `${value.toFixed(2)}ms`;
     }
-    
-    if (milliseconds < 1) {
-      return `${milliseconds.toFixed(2)}ms`;
-    }
-    return `${Math.round(milliseconds)}ms`;
+    return `${Math.round(value)}ms`;
   };
 
   const formatErrorRate = (value: number | null | undefined): string => {
@@ -526,20 +511,11 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
                     }}
                     tickFormatter={(value: number) => {
                       if (chartMode === 'response_time') {
-                        // Convert seconds to milliseconds for response time display
-                        let milliseconds: number;
-                        if (value >= 1) {
-                          milliseconds = value * 1000;
-                        } else if (value > 0.001) {
-                          milliseconds = value * 1000;
-                        } else {
-                          milliseconds = value;
+                        // Values are already in milliseconds from the database
+                        if (value < 1) {
+                          return `${value.toFixed(2)}`;
                         }
-                        
-                        if (milliseconds < 1) {
-                          return `${milliseconds.toFixed(2)}`;
-                        }
-                        return `${Math.round(milliseconds)}`;
+                        return `${Math.round(value)}`;
                       } else {
                         // Error rate is already in percentage
                         return `${value.toFixed(1)}`;
@@ -646,20 +622,11 @@ export function ResponseTimeChart({ sites }: ResponseTimeChartProps) {
                     }}
                     tickFormatter={(value: number) => {
                       if (chartMode === 'response_time') {
-                        // Convert seconds to milliseconds for response time display
-                        let milliseconds: number;
-                        if (value >= 1) {
-                          milliseconds = value * 1000;
-                        } else if (value > 0.001) {
-                          milliseconds = value * 1000;
-                        } else {
-                          milliseconds = value;
+                        // Values are already in milliseconds from the database
+                        if (value < 1) {
+                          return `${value.toFixed(2)}`;
                         }
-                        
-                        if (milliseconds < 1) {
-                          return `${milliseconds.toFixed(2)}`;
-                        }
-                        return `${Math.round(milliseconds)}`;
+                        return `${Math.round(value)}`;
                       } else {
                         // Error rate is already in percentage
                         return `${value.toFixed(1)}`;

@@ -1328,44 +1328,48 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 		}
 		query = fmt.Sprintf(`
 			SELECT 
-				sc.site_id,
+				mt.site_id,
 				s.name as site_name,
 				s.url as site_url,
-				sc.response_time,
-				sc.status,
-				sc.status_code,
-				sc.error_message,
-				sc.checked_at,
+				mr.response_time,
+				mr.status,
+				mr.status_code,
+				mr.error_message,
+				mr.metadata,
+				mr.checked_at,
 				datetime(
-					(strftime('%%s', sc.checked_at) / (%d * 60)) * (%d * 60),
+					(strftime('%%s', mr.checked_at) / (%d * 60)) * (%d * 60),
 					'unixepoch'
 				) as time_bucket
-			FROM site_checks sc
-			JOIN sites s ON sc.site_id = s.id
-			WHERE sc.site_id IN (%s)
-			AND sc.checked_at >= ?
-			ORDER BY sc.checked_at DESC
+			FROM monitor_results mr
+			JOIN monitor_tasks mt ON mr.task_id = mt.id
+			JOIN sites s ON mt.site_id = s.id
+			WHERE mt.site_id IN (%s)
+			AND mr.checked_at >= ?
+			ORDER BY mr.checked_at DESC
 		`, intervalMinutes, intervalMinutes, strings.Join(placeholders, ","))
 		args = append(args, startTime)
 	} else {
 		query = fmt.Sprintf(`
 			SELECT 
-				sc.site_id,
+				mt.site_id,
 				s.name as site_name,
 				s.url as site_url,
-				sc.response_time,
-				sc.status,
-				sc.status_code,
-				sc.error_message,
-				sc.checked_at,
+				mr.response_time,
+				mr.status,
+				mr.status_code,
+				mr.error_message,
+				mr.metadata,
+				mr.checked_at,
 				datetime(
-					(strftime('%%s', sc.checked_at) / (%d * 60)) * (%d * 60),
+					(strftime('%%s', mr.checked_at) / (%d * 60)) * (%d * 60),
 					'unixepoch'
 				) as time_bucket
-			FROM site_checks sc
-			JOIN sites s ON sc.site_id = s.id
-			WHERE sc.checked_at >= ?
-			ORDER BY sc.checked_at DESC
+			FROM monitor_results mr
+			JOIN monitor_tasks mt ON mr.task_id = mt.id
+			JOIN sites s ON mt.site_id = s.id
+			WHERE mr.checked_at >= ?
+			ORDER BY mr.checked_at DESC
 		`, intervalMinutes, intervalMinutes)
 		args = append(args, startTime)
 	}
@@ -1389,9 +1393,10 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 		var responseTime *float64
 		var statusCode *int
 		var errorMessage *string
+		var metadata *string
 		var checkedAt time.Time
 
-		err := rows.Scan(&siteID, &siteName, &siteURL, &responseTime, &status, &statusCode, &errorMessage, &checkedAt, &timeBucket)
+		err := rows.Scan(&siteID, &siteName, &siteURL, &responseTime, &status, &statusCode, &errorMessage, &metadata, &checkedAt, &timeBucket)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan analytics row: %w", err)
 		}
@@ -1425,6 +1430,7 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 		siteKey := fmt.Sprintf("site_%d", siteID)
 		siteErrorKey := fmt.Sprintf("site_%d_errors", siteID)
 		siteTotalKey := fmt.Sprintf("site_%d_total", siteID)
+		siteErrorRateKey := fmt.Sprintf("site_%d_error_rate", siteID)
 
 		// Count total checks and errors for this site in this time bucket
 		if _, exists := bucketCounts[timeBucket][siteTotalKey]; !exists {
@@ -1433,16 +1439,59 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 		}
 		bucketCounts[timeBucket][siteTotalKey]++
 
-		// Determine if this is an error
-		isError := false
-		if status == "down" {
-			isError = true
-		} else if statusCode != nil && (*statusCode >= 400 && *statusCode < 600) {
-			isError = true
+		// Check if this is a log monitoring task with metadata error rate
+		var logErrorRate *float64
+		var logAvgResponseTime *float64
+		if metadata != nil && *metadata != "" {
+			var metadataMap map[string]interface{}
+			if err := json.Unmarshal([]byte(*metadata), &metadataMap); err == nil {
+				if errorRate, exists := metadataMap["error_rate"]; exists {
+					if rate, ok := errorRate.(float64); ok {
+						logErrorRate = &rate
+					}
+				}
+				if avgResponseTime, exists := metadataMap["avg_response_time"]; exists {
+					if responseTime, ok := avgResponseTime.(float64); ok {
+						logAvgResponseTime = &responseTime
+					}
+				}
+			}
 		}
 
-		if isError {
-			bucketCounts[timeBucket][siteErrorKey]++
+		// For log monitoring, use the metadata values directly
+		if logErrorRate != nil {
+			// Use the actual error rate from log analysis
+			timeBuckets[timeBucket][siteErrorRateKey] = *logErrorRate
+			
+			// Also set the average response time from log analysis
+			if logAvgResponseTime != nil {
+				timeBuckets[timeBucket][siteKey] = *logAvgResponseTime
+			}
+			
+			// Debug logging for nginx log monitoring
+			if strings.Contains(strings.ToLower(siteURL), "nginx") || strings.Contains(strings.ToLower(siteName), "nginx") {
+				log.Debug().
+					Int("site_id", siteID).
+					Str("site_name", siteName).
+					Str("site_url", siteURL).
+					Str("status", status).
+					Float64("log_error_rate", *logErrorRate).
+					Interface("log_avg_response_time", logAvgResponseTime).
+					Str("time_bucket", timeBucket).
+					Msg("Analytics: Using log metadata values")
+			}
+		} else {
+			// For non-log monitoring, determine error based on status/status_code
+			isError := false
+			if status == "down" {
+				isError = true
+			} else if statusCode != nil && (*statusCode >= 400 && *statusCode < 600) {
+				isError = true
+			}
+
+			if isError {
+				bucketCounts[timeBucket][siteErrorKey]++
+			}
 		}
 
 		// Add response time for successful checks
@@ -1452,13 +1501,18 @@ func (db *DB) GetAnalyticsData(siteIDs []int, startTime time.Time, intervalMinut
 		}
 	}
 
-	// Calculate error rates and add to time buckets
+	// Calculate error rates and add to time buckets (only for non-log monitoring)
 	for timeBucket, bucket := range timeBuckets {
-		for siteIDStr, _ := range bucketCounts[timeBucket] {
+		for siteIDStr := range bucketCounts[timeBucket] {
 			if strings.HasSuffix(siteIDStr, "_total") {
 				siteKey := strings.TrimSuffix(siteIDStr, "_total")
 				errorKey := siteKey + "_errors"
 				siteErrorRateKey := siteKey + "_error_rate"
+
+				// Skip if error rate was already set from log metadata
+				if _, exists := bucket[siteErrorRateKey]; exists {
+					continue
+				}
 
 				totalChecks := bucketCounts[timeBucket][siteIDStr]
 				errorChecks := bucketCounts[timeBucket][errorKey]

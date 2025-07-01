@@ -1,9 +1,9 @@
 'use client';
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, Clock, TrendingUp, TrendingDown, CheckCircle, XCircle, Globe } from "lucide-react";
 import { type MonitorStats, type SiteStatus } from "@/lib/api";
-import { cn, formatResponseTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { Activity, CheckCircle, Clock, Globe, TrendingDown, TrendingUp } from "lucide-react";
 
 interface MetricsCardsProps {
   stats: MonitorStats | null;
@@ -61,7 +61,39 @@ export function MetricsCards({ stats, sites }: MetricsCardsProps) {
     return "text-red-500";
   };
 
+  // Danger level detection functions
+  const getUptimeDangerLevel = (uptime: number) => {
+    if (uptime < 95) return "critical";
+    if (uptime < 99) return "warning";
+    return "safe";
+  };
+
+  const getResponseTimeDangerLevel = (responseTime: number) => {
+    if (responseTime > 2000) return "critical";
+    if (responseTime > 1000) return "warning";
+    return "safe";
+  };
+
+  const getSitesOnlineDangerLevel = (sitesUp: number, totalSites: number) => {
+    if (totalSites === 0) return "safe";
+    const percentage = (sitesUp / totalSites) * 100;
+    if (percentage < 50) return "critical";
+    if (percentage < 80) return "warning";
+    return "safe";
+  };
+
+  // Animation class helper
+  const getDangerAnimationClass = (dangerLevel: string) => {
+    if (dangerLevel === "critical" || dangerLevel === "warning") {
+      return "animate-glow-flash";
+    }
+    return "";
+  };
+
   const uptimeValue = parseFloat(uptimePercentage);
+  const uptimeDangerLevel = getUptimeDangerLevel(uptimeValue);
+  const responseTimeDangerLevel = getResponseTimeDangerLevel(avgResponseTimeMs);
+  const sitesOnlineDangerLevel = getSitesOnlineDangerLevel(stats.sites_up, stats.total_sites);
 
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -80,7 +112,7 @@ export function MetricsCards({ stats, sites }: MetricsCardsProps) {
       </Card>
 
       {/* Overall Uptime */}
-      <Card>
+      <Card className={getDangerAnimationClass(uptimeDangerLevel)}>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">Overall Uptime</CardTitle>
           <Activity className={cn("h-4 w-4", getUptimeIconColor(uptimeValue))} />
@@ -94,13 +126,14 @@ export function MetricsCards({ stats, sites }: MetricsCardsProps) {
               <TrendingDown className="mr-1 h-3 w-3 text-red-500" />
             )}
             {uptimeValue >= 99.99 ? "Excellent uptime" : 
-             uptimeValue >= 99.95 ? "Good uptime" : "Needs attention"}
+             uptimeValue >= 99.95 ? "Good uptime" : 
+             uptimeValue >= 95 ? "Needs attention" : "Critical - Immediate action required"}
           </p>
         </CardContent>
       </Card>
 
       {/* Sites Online */}
-      <Card>
+      <Card className={getDangerAnimationClass(sitesOnlineDangerLevel)}>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">Resources Online</CardTitle>
           <CheckCircle className={cn(
@@ -112,7 +145,11 @@ export function MetricsCards({ stats, sites }: MetricsCardsProps) {
           <div className="text-2xl font-bold text-green-600">{stats.sites_up}</div>
           <p className="text-xs text-muted-foreground">
             {stats.sites_down > 0 && (
-              <span className="text-red-600">{stats.sites_down} down</span>
+              <span className="text-red-600">
+                {stats.sites_down} down
+                {sitesOnlineDangerLevel === "critical" && " - Critical"}
+                {sitesOnlineDangerLevel === "warning" && " - Warning"}
+              </span>
             )}
             {stats.sites_down === 0 && "All systems operational"}
           </p>
@@ -120,7 +157,7 @@ export function MetricsCards({ stats, sites }: MetricsCardsProps) {
       </Card>
 
       {/* Average Response Time */}
-      <Card>
+      <Card className={getDangerAnimationClass(responseTimeDangerLevel)}>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-sm font-medium">Avg Response Time</CardTitle>
           <Clock className={cn(
@@ -139,7 +176,9 @@ export function MetricsCards({ stats, sites }: MetricsCardsProps) {
               <TrendingDown className="mr-1 h-3 w-3 text-red-500" />
             )}
             {avgResponseTimeMs <= 200 ? "Excellent response" :
-             avgResponseTimeMs <= 500 ? "Good response" : "Slow response"}
+             avgResponseTimeMs <= 500 ? "Good response" : 
+             avgResponseTimeMs <= 1000 ? "Slow response" :
+             avgResponseTimeMs <= 2000 ? "Very slow - Needs attention" : "Critical - Performance degraded"}
           </p>
         </CardContent>
       </Card>

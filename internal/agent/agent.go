@@ -38,6 +38,9 @@ type Agent struct {
 	useWebSocket bool
 	osInfo       OSInfo
 
+	// WebSocket synchronization
+	wsMutex sync.Mutex
+
 	// Monitoring tasks management
 	tasks           []models.MonitorTask
 	tasksMutex      sync.RWMutex
@@ -512,6 +515,9 @@ func (a *Agent) sendWebSocketMessage(message map[string]interface{}) error {
 	if a.wsConn == nil {
 		return fmt.Errorf("WebSocket connection not established")
 	}
+
+	a.wsMutex.Lock()
+	defer a.wsMutex.Unlock()
 
 	data, err := json.Marshal(message)
 	if err != nil {
