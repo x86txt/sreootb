@@ -1,71 +1,90 @@
 # SRE: Out of the Box (SREootb) v2
 
-**SREootb** is a modern, lightweight website monitoring and alerting solution that provides both server and agent functionality in a single Go binary. It features an embedded web interface, supports HTTP/2 and HTTP/3, and is designed for simplicity and reliability.
+**SREootb** is a modern, lightweight website monitoring and alerting solution built as a single Go binary with an embedded web interface. Features distributed agent support, user authentication, and high availability options.
 
 ## 🚀 Features
 
 - **Single Binary**: Server and agent functionality in one executable
-- **Embedded Web Interface**: Modern, responsive dashboard with real-time updates
-- **Modern Protocols**: HTTP/2 and HTTP/3 support with automatic TLS
-- **Multiple Monitor Types**: HTTP/HTTPS and ping monitoring
-- **High Performance**: Built in Go with efficient monitoring loops
-- **Structured Logging**: JSON and console output via zerolog
-- **SQLite Database**: Lightweight, zero-configuration database
-- **Agent Support**: Deploy monitoring agents across different networks
+- **User Authentication**: Email/password registration with optional TOTP 2FA
+- **Embedded Web Interface**: Modern React dashboard with real-time updates
+- **Distributed Monitoring**: Deploy agents across different networks
+- **Multiple Protocols**: HTTP/HTTPS, ping monitoring with HTTP/2 and HTTP/3 support
+- **High Availability**: CockroachDB cluster support for production deployments
+- **Auto-TLS**: Automatic ed25519 certificate generation
 - **REST API**: Complete API for automation and integration
+- **Structured Logging**: JSON and console output via zerolog
 
 ## 📦 Installation
 
 ### Download Binary
 ```bash
-# Download the latest release (when available)
-wget https://github.com/sreoob/sreoob/releases/download/v2.0.0/sreoob-linux-amd64
-chmod +x sreoob-linux-amd64
-sudo mv sreoob-linux-amd64 /usr/local/bin/sreoob
+# Download the latest release
+wget https://github.com/x86txt/sreootb/releases/latest/download/sreootb-linux-amd64
+chmod +x sreootb-linux-amd64
+sudo mv sreootb-linux-amd64 /usr/local/bin/sreootb
 ```
 
 ### Build from Source
 ```bash
-git clone https://github.com/sreoob/sreoob.git
-cd sreoob/v2
-go build -o sreoob
+git clone https://github.com/x86txt/sreootb.git
+cd sreootb
+go build -o sreootb
 ```
 
 ## 🎯 Quick Start
 
-### 1. Server Mode
-Start the monitoring server with embedded web interface:
+### 1. Standalone Mode (Recommended)
+Run both server and local agent in a single process:
 
 ```bash
-# Basic server (HTTP on :8080)
-./sreoob server
+# Basic standalone mode
+./sreootb standalone
 
-# Custom configuration
-./sreoob server --bind 0.0.0.0:8080 --db-path ./monitoring.db
+# With custom configuration
+./sreootb standalone --bind 0.0.0.0:8080 --db-type sqlite
 
-# With TLS (enables HTTP/2)
-./sreoob server --tls-cert ./cert.pem --tls-key ./key.pem
-
-# With HTTP/3 support
-./sreoob server --tls-cert ./cert.pem --tls-key ./key.pem --http3
+# With CockroachDB for HA
+./sreootb standalone --db-type cockroachdb --db-host localhost --db-database sreootb
 ```
 
-### 2. Agent Mode
-Deploy monitoring agents on remote networks:
+### 2. Server Only Mode
+```bash
+# Basic server
+./sreootb server
 
+# With custom TLS certificates
+./sreootb server --tls-cert ./cert.pem --tls-key ./key.pem
+```
+
+### 3. Agent Only Mode
 ```bash
 # Agent connecting to server
-./sreoob agent --server-url https://monitor.example.com --api-key YOUR_API_KEY
+./sreootb agent --server-url https://monitor.example.com --api-key YOUR_API_KEY
 ```
 
-### 3. Access Web Interface
-Open your browser to `http://localhost:8080` to access the monitoring dashboard.
+### 4. Access Web Interface
+1. Open `http://localhost:8080` in your browser
+2. Register a new account with email/password
+3. Verify your email (check console output in development)
+4. Start adding sites to monitor
+
+**Emergency Access**: The master API key is still available for emergency access if needed.
 
 ## ⚙️ Configuration
 
-### Configuration File
-Create `sreootb.yaml` in your working directory:
+### Generate Configuration
+```bash
+# Generate sample config for standalone mode
+./sreootb standalone --gen-config
 
+# Generate sample config for server mode
+./sreootb server --gen-config
+
+# Generate systemd service file
+./sreootb server --gen-systemd
+```
+
+### Example Configuration (`sreootb.yaml`)
 ```yaml
 log:
   level: "info"
@@ -73,71 +92,124 @@ log:
 
 server:
   bind: "0.0.0.0:8080"
-  db_path: "./sreoob.db"
+  agent_bind: "0.0.0.0:8081"
+  auto_tls: true
+  
+  database:
+    type: "sqlite"
+    sqlite_path: "./sreootb.db"
+    
+    # For CockroachDB HA deployment
+    # type: "cockroachdb"
+    # host: "10.28.0.4"
+    # port: 26257
+    # database: "sreootb"
+    # user: "sreootb_user"
+    # password: "your_secure_password"
+    # ssl_mode: "require"
+    # ssl_root_cert: "/opt/cockroach-certs/ca.crt"
+    # ssl_cert: "/opt/cockroach-certs/client.sreootb_user.crt"
+    # ssl_key: "/opt/cockroach-certs/client.sreootb_user.key"
+  
+  admin_api_key: "your_generated_admin_key_here"
   min_scan_interval: "10s"
   max_scan_interval: "24h"
 
 agent:
   server_url: "https://your-server.com"
   api_key: "your-64-character-api-key"
+  agent_id: "unique-agent-name"
   check_interval: "30s"
-```
-
-### Environment Variables
-All configuration can be set via environment variables:
-
-```bash
-export LOG_LEVEL=info
-export SERVER_BIND=0.0.0.0:8080
-export SERVER_DB_PATH=./sreoob.db
-export AGENT_SERVER_URL=https://monitor.example.com
-export AGENT_API_KEY=your-api-key
+  bind: "127.0.0.1:8081"
 ```
 
 ## 🔧 CLI Commands
 
-### Server Commands
+### Standalone Mode
 ```bash
-# Start server
-./sreoob server [flags]
+./sreootb standalone [flags]
 
-Flags:
-  --bind string        Address to bind server to (default "0.0.0.0:8080")
-  --db-path string     SQLite database path (default "./sreoob.db")
-  --tls-cert string    Path to TLS certificate file
-  --tls-key string     Path to TLS private key file
-  --http3              Enable HTTP/3 support (requires TLS)
+Key Flags:
+  --bind string              Web server bind address (default "0.0.0.0:8080")
+  --agent-bind string        Agent API bind address (default "127.0.0.1:8081")
+  --db-type string          Database type: sqlite or cockroachdb (default "sqlite")
+  --db-sqlite-path string   SQLite database path (default "./sreootb.db")
+  --auto-tls                Enable automatic TLS certificate generation (default true)
+  --check-interval duration Agent check interval (default 30s)
 ```
 
-### Agent Commands
+### Server Mode
 ```bash
-# Start agent
-./sreoob agent [flags]
+./sreootb server [flags]
 
-Flags:
-  --server-url string     URL of SREootb server
-  --api-key string        API key for agent authentication
-  --agent-id string       Unique identifier for this agent
-  --check-interval duration  Interval between server checks (default 30s)
-  --bind string           Address for agent health endpoint (default "127.0.0.1:8081")
+Key Flags:
+  --bind string        Web server bind address (default "0.0.0.0:8080")
+  --agent-bind string  Agent API bind address (default "0.0.0.0:8081")
+  --db-type string     Database type: sqlite or cockroachdb
+  --auto-tls          Enable automatic TLS (default true)
+  --tls-cert string   Custom TLS certificate file
+  --tls-key string    Custom TLS private key file
+```
+
+### Agent Mode
+```bash
+./sreootb agent [flags]
+
+Key Flags:
+  --server-url string       URL of SREootb server
+  --api-key string         API key for agent authentication
+  --agent-id string        Unique identifier for this agent
+  --check-interval duration Interval between server checks (default 30s)
+  --bind string            Address for agent health endpoint (default "127.0.0.1:8081")
 ```
 
 ### Global Flags
 ```bash
-  --config string       Config file (default "./sreootb.yaml")
-  --log-level string    Log level (trace, debug, info, warn, error) (default "info")
-  --log-format string   Log format (console, json) (default "console")
+  --config string       Config file (default searches for sreootb.yaml)
+  --log-level string    Log level: trace, debug, info, warn, error (default "info")
+  --log-format string   Log format: console or json (default "console")
+  --gen-config         Generate sample configuration file
+  --gen-systemd        Generate systemd service file
 ```
 
 ## 🌐 API Reference
+
+### Authentication
+```bash
+# Register new user
+POST /api/auth/register
+{
+  "email": "user@example.com",
+  "password": "SecurePass123!",
+  "first_name": "John",
+  "last_name": "Doe"
+}
+
+# Login
+POST /api/auth/login
+{
+  "email": "user@example.com",
+  "password": "SecurePass123!",
+  "totp_code": "123456"  // Optional for 2FA
+}
+
+# Master key login (emergency access)
+POST /api/auth/master-login
+{
+  "api_key": "your-master-api-key"
+}
+
+# Verify email
+POST /api/auth/verify-email
+{
+  "token": "verification-token-from-email"
+}
+```
 
 ### Sites Management
 ```bash
 # Get all sites
 GET /api/sites
-
-# Get site statuses
-GET /api/sites/status
 
 # Add new site
 POST /api/sites
@@ -154,22 +226,7 @@ GET /api/sites/{id}/history?limit=100
 DELETE /api/sites/{id}
 ```
 
-### Monitoring
-```bash
-# Get monitoring statistics
-GET /api/stats
-
-# Trigger manual check
-POST /api/check/manual
-{
-  "site_ids": [1, 2, 3]  // Optional: specific sites, omit for all
-}
-
-# Health check
-GET /api/health
-```
-
-### Agent Management
+### Agents
 ```bash
 # List agents
 GET /api/agents
@@ -181,16 +238,11 @@ POST /api/agents
   "api_key": "64-character-api-key",
   "description": "Optional description"
 }
-
-# Delete agent
-DELETE /api/agents/{id}
 ```
 
 ## 📊 Monitoring Types
 
 ### HTTP/HTTPS Monitoring
-Monitor web services with customizable intervals:
-
 ```json
 {
   "url": "https://api.example.com/health",
@@ -199,15 +251,7 @@ Monitor web services with customizable intervals:
 }
 ```
 
-Supports:
-- HTTP and HTTPS protocols
-- Response time measurement
-- Status code validation
-- Custom timeouts and retries
-
 ### Ping Monitoring
-Monitor network connectivity:
-
 ```json
 {
   "url": "ping://8.8.8.8",
@@ -216,112 +260,85 @@ Monitor network connectivity:
 }
 ```
 
-Features:
-- ICMP ping support
-- Network reachability testing
-- Configurable intervals
-
 ## 🏗️ Architecture
 
-### Single Binary Design
-- **Server Mode**: Web interface, API, monitoring engine, database
-- **Agent Mode**: Lightweight monitoring client, health endpoint
-- **Shared Components**: Configuration, logging, HTTP clients
+### Deployment Modes
+1. **Standalone**: Single process with server + local agent (recommended)
+2. **Server Only**: Central monitoring server
+3. **Distributed**: Server + multiple remote agents
+4. **High Availability**: CockroachDB cluster with multiple SREootb instances
 
 ### Technology Stack
-- **Backend**: Go 1.21+, Chi router, SQLite database
-- **Frontend**: Embedded HTML/CSS/JavaScript SPA
+- **Backend**: Go 1.23+, Chi router
+- **Database**: SQLite (default) or CockroachDB (HA)
+- **Frontend**: Next.js 15, React 19, TailwindCSS
+- **Authentication**: bcrypt passwords, TOTP 2FA, session tokens
 - **Protocols**: HTTP/1.1, HTTP/2, HTTP/3 (QUIC)
-- **Logging**: Zerolog with structured output
-- **Database**: SQLite with WAL mode
 
 ## 🔒 Security
 
+### User Authentication
+- **Email/password** registration with strong password requirements
+- **Email verification** required for account activation
+- **TOTP 2FA** with QR codes and backup codes
+- **Session-based** authentication with secure tokens
+- **Master API key** preserved for emergency access
+
 ### TLS Configuration
 ```bash
-# Generate self-signed certificate for testing
-openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+# Auto-TLS (default) - generates ed25519 certificates automatically
+./sreootb server --auto-tls
 
-# Start with TLS
-./sreoob server --tls-cert cert.pem --tls-key key.pem
+# Custom certificates
+./sreootb server --tls-cert cert.pem --tls-key key.pem
 ```
 
-### API Key Management
+## 🏢 High Availability Deployment
+
+### CockroachDB Cluster Setup
 ```bash
-# Generate secure API key (64 characters)
-openssl rand -hex 32
+# Deploy 3-node CockroachDB cluster with ECDSA certificates
+./scripts/deploydb.sh
 
-# Hash for storage (server handles this automatically)
-echo -n "your-api-key" | sha256sum
+# Configure SREootb for HA
+./sreootb server --db-type cockroachdb --db-host 10.28.0.4 --db-database sreootb
 ```
+
+See `COCKROACHDB_HA_SETUP.md` for detailed HA deployment instructions.
 
 ## 📈 Performance
 
 ### Resource Usage
-- **Memory**: ~10-50MB depending on site count
+- **Memory**: ~10-100MB depending on site count and agents
 - **CPU**: Minimal, scales with monitoring frequency
-- **Storage**: SQLite database grows with check history
-- **Network**: Efficient HTTP clients with connection pooling
+- **Storage**: Database grows with check history
+- **Network**: Efficient with connection pooling
 
 ### Scaling Guidelines
 - **Sites**: Tested with 1000+ sites per instance
-- **Intervals**: Minimum 10 seconds, maximum 24 hours
 - **Agents**: Unlimited agents per server
-- **History**: Automatic cleanup recommended for high-frequency monitoring
+- **Intervals**: 10s minimum, 24h maximum
+- **HA**: Use CockroachDB cluster for production scale
 
 ## 🛠️ Development
 
 ### Building
 ```bash
 # Build for current platform
-go build -o sreoob
+go build -o sreootb
 
-# Cross-compile
-GOOS=linux GOARCH=amd64 go build -o sreoob-linux-amd64
+# Build with frontend (requires Node.js)
+cd frontend && npm run build:go && cd ..
+go build -o sreootb
 
-# Build with version info
-go build -ldflags "-X main.version=2.0.0" -o sreoob
+# Cross-compile (see scripts/build.sh for all platforms)
+./scripts/build.sh linux amd64
 ```
 
-### Testing
-```bash
-# Run tests
-go test ./...
-
-# Run with coverage
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out
-```
-
-## 📝 Configuration Examples
-
-### Production Server
-```yaml
-log:
-  level: "info"
-  format: "json"
-
-server:
-  bind: "0.0.0.0:443"
-  db_path: "/var/lib/sreoob/sreoob.db"
-  tls_cert: "/etc/ssl/certs/sreoob.crt"
-  tls_key: "/etc/ssl/private/sreoob.key"
-  http3: true
-  min_scan_interval: "30s"
-  max_scan_interval: "1h"
-```
-
-### Development Setup
-```yaml
-log:
-  level: "debug"
-  format: "console"
-
-server:
-  bind: "127.0.0.1:8080"
-  db_path: "./dev.db"
-  dev_mode: true
-```
+### Dependencies
+- Go 1.23+
+- Node.js 18+ (for frontend development)
+- Optional: CockroachDB for HA deployments
 
 ## 🤝 Contributing
 
@@ -335,13 +352,6 @@ server:
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🔗 Links
-
-- **GitHub**: https://github.com/sreoob/sreoob
-- **Documentation**: https://docs.sreoob.com
-- **Issues**: https://github.com/sreoob/sreoob/issues
-- **Releases**: https://github.com/sreoob/sreoob/releases
-
 ---
 
-**SRE: Out of the Box** - Simple, reliable, and efficient website monitoring for modern infrastructure. 
+**SRE: Out of the Box** - Modern website monitoring with user authentication, distributed agents, and high availability options. 
