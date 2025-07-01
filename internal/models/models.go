@@ -9,6 +9,190 @@ import (
 	"time"
 )
 
+// User represents a user account
+type User struct {
+	ID               int        `json:"id" db:"id"`
+	Email            string     `json:"email" db:"email"`
+	PasswordHash     string     `json:"-" db:"password_hash"`
+	FirstName        string     `json:"first_name" db:"first_name"`
+	LastName         string     `json:"last_name" db:"last_name"`
+	Role             string     `json:"role" db:"role"` // "admin", "user"
+	EmailVerified    bool       `json:"email_verified" db:"email_verified"`
+	TwoFactorEnabled bool       `json:"two_factor_enabled" db:"two_factor_enabled"`
+	TwoFactorSecret  *string    `json:"-" db:"two_factor_secret"` // TOTP secret, encrypted
+	LastLoginAt      *time.Time `json:"last_login_at" db:"last_login_at"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
+}
+
+// UserSession represents an active user session
+type UserSession struct {
+	ID        string    `json:"id" db:"id"` // UUID
+	UserID    int       `json:"user_id" db:"user_id"`
+	Token     string    `json:"-" db:"token_hash"` // Hashed session token
+	ExpiresAt time.Time `json:"expires_at" db:"expires_at"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UserAgent *string   `json:"user_agent" db:"user_agent"`
+	IPAddress *string   `json:"ip_address" db:"ip_address"`
+}
+
+// EmailVerification represents an email verification token
+type EmailVerification struct {
+	ID        int       `json:"id" db:"id"`
+	UserID    int       `json:"user_id" db:"user_id"`
+	Token     string    `json:"-" db:"token"` // Verification token
+	ExpiresAt time.Time `json:"expires_at" db:"expires_at"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	Used      bool      `json:"used" db:"used"`
+}
+
+// TwoFactorAuth represents 2FA backup codes
+type TwoFactorAuth struct {
+	ID        int        `json:"id" db:"id"`
+	UserID    int        `json:"user_id" db:"user_id"`
+	Code      string     `json:"-" db:"code_hash"` // Hashed backup code
+	Used      bool       `json:"used" db:"used"`
+	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	UsedAt    *time.Time `json:"used_at" db:"used_at"`
+}
+
+// UserRegistrationRequest represents a user registration request
+type UserRegistrationRequest struct {
+	Email     string `json:"email" validate:"required,email"`
+	Password  string `json:"password" validate:"required,min=8"`
+	FirstName string `json:"first_name" validate:"required,min=1"`
+	LastName  string `json:"last_name" validate:"required,min=1"`
+}
+
+// UserLoginRequest represents a user login request
+type UserLoginRequest struct {
+	Email      string  `json:"email" validate:"required,email"`
+	Password   string  `json:"password" validate:"required"`
+	TOTPCode   *string `json:"totp_code"`   // Optional TOTP code for 2FA
+	RememberMe bool    `json:"remember_me"` // Extend session duration
+}
+
+// MasterKeyLoginRequest represents a master API key login request
+type MasterKeyLoginRequest struct {
+	APIKey string `json:"api_key" validate:"required"`
+}
+
+// UserLoginResponse represents a successful login response
+type UserLoginResponse struct {
+	Success      bool   `json:"success"`
+	SessionToken string `json:"session_token"`
+	User         *User  `json:"user"`
+	Message      string `json:"message"`
+	RequiresTOTP bool   `json:"requires_totp,omitempty"` // If 2FA is enabled but code not provided
+}
+
+// EmailVerificationRequest represents an email verification request
+type EmailVerificationRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
+// TwoFactorSetupRequest represents a request to set up 2FA
+type TwoFactorSetupRequest struct {
+	TOTPCode string `json:"totp_code" validate:"required"`
+}
+
+// TwoFactorSetupResponse represents the response for 2FA setup
+type TwoFactorSetupResponse struct {
+	Success     bool     `json:"success"`
+	Secret      string   `json:"secret"`
+	QRCodeURL   string   `json:"qr_code_url"`
+	BackupCodes []string `json:"backup_codes"`
+	Message     string   `json:"message"`
+}
+
+// TwoFactorDisableRequest represents a request to disable 2FA
+type TwoFactorDisableRequest struct {
+	Password string `json:"password" validate:"required"`
+	TOTPCode string `json:"totp_code" validate:"required"`
+}
+
+// PasswordChangeRequest represents a password change request
+type PasswordChangeRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required"`
+	NewPassword     string `json:"new_password" validate:"required,min=8"`
+}
+
+// ForgotPasswordRequest represents a forgot password request
+type ForgotPasswordRequest struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+// ResetPasswordRequest represents a password reset request
+type ResetPasswordRequest struct {
+	Token       string `json:"token" validate:"required"`
+	NewPassword string `json:"new_password" validate:"required,min=8"`
+}
+
+// Validate validates a UserRegistrationRequest
+func (u *UserRegistrationRequest) Validate() error {
+	if u.Email == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	// Validate email format
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	if !emailRegex.MatchString(u.Email) {
+		return fmt.Errorf("invalid email format")
+	}
+
+	if u.Password == "" {
+		return fmt.Errorf("password is required")
+	}
+
+	if len(u.Password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters long")
+	}
+
+	// Check password complexity
+	if !isStrongPassword(u.Password) {
+		return fmt.Errorf("password must contain at least one uppercase letter, one lowercase letter, one number, and one special character")
+	}
+
+	if u.FirstName == "" {
+		return fmt.Errorf("first name is required")
+	}
+
+	if u.LastName == "" {
+		return fmt.Errorf("last name is required")
+	}
+
+	return nil
+}
+
+// Validate validates a UserLoginRequest
+func (u *UserLoginRequest) Validate() error {
+	if u.Email == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	if u.Password == "" {
+		return fmt.Errorf("password is required")
+	}
+
+	return nil
+}
+
+// isStrongPassword checks if a password meets complexity requirements
+func isStrongPassword(password string) bool {
+	// At least 8 characters
+	if len(password) < 8 {
+		return false
+	}
+
+	// Check for uppercase, lowercase, number, and special character
+	hasUpper := regexp.MustCompile(`[A-Z]`).MatchString(password)
+	hasLower := regexp.MustCompile(`[a-z]`).MatchString(password)
+	hasNumber := regexp.MustCompile(`[0-9]`).MatchString(password)
+	hasSpecial := regexp.MustCompile(`[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]`).MatchString(password)
+
+	return hasUpper && hasLower && hasNumber && hasSpecial
+}
+
 // Site represents a website to monitor
 type Site struct {
 	ID           int       `json:"id" db:"id"`

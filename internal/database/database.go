@@ -155,6 +155,58 @@ func (db *DB) getInitQueries() []string {
 // getSQLiteInitQueries returns SQLite-specific initialization queries
 func (db *DB) getSQLiteInitQueries() []string {
 	return []string{
+		// User authentication tables
+		`CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			email TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			first_name TEXT NOT NULL,
+			last_name TEXT NOT NULL,
+			role TEXT DEFAULT 'user',
+			email_verified BOOLEAN DEFAULT 0,
+			two_factor_enabled BOOLEAN DEFAULT 0,
+			two_factor_secret TEXT,
+			last_login_at TIMESTAMP,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS user_sessions (
+			id TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL,
+			token_hash TEXT NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			user_agent TEXT,
+			ip_address TEXT,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS email_verifications (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			token TEXT NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			used BOOLEAN DEFAULT 0,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS two_factor_backup_codes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			code_hash TEXT NOT NULL,
+			used BOOLEAN DEFAULT 0,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			used_at TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS password_reset_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			token TEXT NOT NULL,
+			expires_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			used BOOLEAN DEFAULT 0,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS sites (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			url TEXT UNIQUE NOT NULL,
@@ -223,7 +275,16 @@ func (db *DB) getSQLiteInitQueries() []string {
 			FOREIGN KEY (task_id) REFERENCES monitor_tasks (id) ON DELETE CASCADE,
 			UNIQUE(agent_id, task_id)
 		)`,
-		// Indexes
+		// Indexes for user authentication
+		`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_email_verifications_user_id ON email_verifications(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_email_verifications_token ON email_verifications(token)`,
+		`CREATE INDEX IF NOT EXISTS idx_two_factor_backup_codes_user_id ON two_factor_backup_codes(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token ON password_reset_tokens(token)`,
+		// Indexes for monitoring
 		`CREATE INDEX IF NOT EXISTS idx_site_checks_site_id ON site_checks(site_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_site_checks_checked_at ON site_checks(checked_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_agents_api_key_hash ON agents(api_key_hash)`,
@@ -240,6 +301,58 @@ func (db *DB) getSQLiteInitQueries() []string {
 // getCockroachInitQueries returns CockroachDB-specific initialization queries
 func (db *DB) getCockroachInitQueries() []string {
 	return []string{
+		// User authentication tables
+		`CREATE TABLE IF NOT EXISTS users (
+			id SERIAL PRIMARY KEY,
+			email STRING UNIQUE NOT NULL,
+			password_hash STRING NOT NULL,
+			first_name STRING NOT NULL,
+			last_name STRING NOT NULL,
+			role STRING DEFAULT 'user',
+			email_verified BOOL DEFAULT false,
+			two_factor_enabled BOOL DEFAULT false,
+			two_factor_secret STRING,
+			last_login_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			updated_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS user_sessions (
+			id STRING PRIMARY KEY,
+			user_id INT NOT NULL,
+			token_hash STRING NOT NULL,
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			user_agent STRING,
+			ip_address STRING,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS email_verifications (
+			id SERIAL PRIMARY KEY,
+			user_id INT NOT NULL,
+			token STRING NOT NULL,
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			used BOOL DEFAULT false,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS two_factor_backup_codes (
+			id SERIAL PRIMARY KEY,
+			user_id INT NOT NULL,
+			code_hash STRING NOT NULL,
+			used BOOL DEFAULT false,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			used_at TIMESTAMPTZ,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS password_reset_tokens (
+			id SERIAL PRIMARY KEY,
+			user_id INT NOT NULL,
+			token STRING NOT NULL,
+			expires_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ DEFAULT NOW(),
+			used BOOL DEFAULT false,
+			FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS sites (
 			id SERIAL PRIMARY KEY,
 			url STRING UNIQUE NOT NULL,
@@ -308,7 +421,16 @@ func (db *DB) getCockroachInitQueries() []string {
 			FOREIGN KEY (task_id) REFERENCES monitor_tasks (id) ON DELETE CASCADE,
 			UNIQUE(agent_id, task_id)
 		)`,
-		// Indexes
+		// Indexes for user authentication
+		`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_email_verifications_user_id ON email_verifications(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_email_verifications_token ON email_verifications(token)`,
+		`CREATE INDEX IF NOT EXISTS idx_two_factor_backup_codes_user_id ON two_factor_backup_codes(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token ON password_reset_tokens(token)`,
+		// Indexes for monitoring
 		`CREATE INDEX IF NOT EXISTS idx_site_checks_site_id ON site_checks(site_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_site_checks_checked_at ON site_checks(checked_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_agents_api_key_hash ON agents(api_key_hash)`,
@@ -1376,4 +1498,289 @@ func (db *DB) GetAgentByKeyHashWithType(keyHash string) (*models.Agent, string, 
 	}
 
 	return &agent, keyType, nil
+}
+
+// User authentication methods
+
+// CreateUser creates a new user account
+func (db *DB) CreateUser(req *models.UserRegistrationRequest, passwordHash string) (*models.User, error) {
+	var newUser models.User
+	newUser.Email = req.Email
+	newUser.PasswordHash = passwordHash
+	newUser.FirstName = req.FirstName
+	newUser.LastName = req.LastName
+	newUser.Role = "user" // Default role
+	newUser.EmailVerified = false
+	newUser.TwoFactorEnabled = false
+
+	var err error
+	switch db.dbType {
+	case SQLite:
+		query := `INSERT INTO users (email, password_hash, first_name, last_name, role, email_verified, two_factor_enabled) 
+				  VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, created_at, updated_at`
+		err = db.conn.QueryRow(query, req.Email, passwordHash, req.FirstName, req.LastName, "user",
+			db.boolValue(false), db.boolValue(false)).Scan(&newUser.ID, &newUser.CreatedAt, &newUser.UpdatedAt)
+	case CockroachDB:
+		query := `INSERT INTO users (email, password_hash, first_name, last_name, role, email_verified, two_factor_enabled) 
+				  VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at, updated_at`
+		err = db.conn.QueryRow(query, req.Email, passwordHash, req.FirstName, req.LastName, "user",
+			db.boolValue(false), db.boolValue(false)).Scan(&newUser.ID, &newUser.CreatedAt, &newUser.UpdatedAt)
+	default:
+		return nil, fmt.Errorf("unsupported database type")
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create user: %w", err)
+	}
+
+	return &newUser, nil
+}
+
+// GetUserByEmail returns a user by email address
+func (db *DB) GetUserByEmail(email string) (*models.User, error) {
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `SELECT id, email, password_hash, first_name, last_name, role, email_verified, two_factor_enabled, 
+				 two_factor_secret, last_login_at, created_at, updated_at FROM users WHERE email = ?`
+	case CockroachDB:
+		query = `SELECT id, email, password_hash, first_name, last_name, role, email_verified, two_factor_enabled, 
+				 two_factor_secret, last_login_at, created_at, updated_at FROM users WHERE email = $1`
+	default:
+		return nil, fmt.Errorf("unsupported database type")
+	}
+
+	var user models.User
+	err := db.conn.QueryRow(query, email).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.FirstName,
+		&user.LastName, &user.Role, &user.EmailVerified, &user.TwoFactorEnabled, &user.TwoFactorSecret,
+		&user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	return &user, nil
+}
+
+// GetUserByID returns a user by ID
+func (db *DB) GetUserByID(id int) (*models.User, error) {
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `SELECT id, email, password_hash, first_name, last_name, role, email_verified, two_factor_enabled, 
+				 two_factor_secret, last_login_at, created_at, updated_at FROM users WHERE id = ?`
+	case CockroachDB:
+		query = `SELECT id, email, password_hash, first_name, last_name, role, email_verified, two_factor_enabled, 
+				 two_factor_secret, last_login_at, created_at, updated_at FROM users WHERE id = $1`
+	default:
+		return nil, fmt.Errorf("unsupported database type")
+	}
+
+	var user models.User
+	err := db.conn.QueryRow(query, id).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.FirstName,
+		&user.LastName, &user.Role, &user.EmailVerified, &user.TwoFactorEnabled, &user.TwoFactorSecret,
+		&user.LastLoginAt, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	return &user, nil
+}
+
+// CreateUserSession creates a new user session
+func (db *DB) CreateUserSession(userID int, sessionID, tokenHash string, expiresAt time.Time, userAgent, ipAddress *string) error {
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `INSERT INTO user_sessions (id, user_id, token_hash, expires_at, user_agent, ip_address) 
+				 VALUES (?, ?, ?, ?, ?, ?)`
+	case CockroachDB:
+		query = `INSERT INTO user_sessions (id, user_id, token_hash, expires_at, user_agent, ip_address) 
+				 VALUES ($1, $2, $3, $4, $5, $6)`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
+
+	_, err := db.conn.Exec(query, sessionID, userID, tokenHash, expiresAt, userAgent, ipAddress)
+	if err != nil {
+		return fmt.Errorf("failed to create user session: %w", err)
+	}
+
+	return nil
+}
+
+// GetUserSession returns a user session by token hash
+func (db *DB) GetUserSession(tokenHash string) (*models.UserSession, error) {
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `SELECT id, user_id, token_hash, expires_at, created_at, user_agent, ip_address 
+				 FROM user_sessions WHERE token_hash = ? AND expires_at > ?`
+	case CockroachDB:
+		query = `SELECT id, user_id, token_hash, expires_at, created_at, user_agent, ip_address 
+				 FROM user_sessions WHERE token_hash = $1 AND expires_at > $2`
+	default:
+		return nil, fmt.Errorf("unsupported database type")
+	}
+
+	var session models.UserSession
+	err := db.conn.QueryRow(query, tokenHash, time.Now()).Scan(&session.ID, &session.UserID, &session.Token,
+		&session.ExpiresAt, &session.CreatedAt, &session.UserAgent, &session.IPAddress)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get user session: %w", err)
+	}
+
+	return &session, nil
+}
+
+// DeleteUserSession deletes a user session
+func (db *DB) DeleteUserSession(sessionID string) error {
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `DELETE FROM user_sessions WHERE id = ?`
+	case CockroachDB:
+		query = `DELETE FROM user_sessions WHERE id = $1`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
+
+	_, err := db.conn.Exec(query, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete user session: %w", err)
+	}
+
+	return nil
+}
+
+// CleanupExpiredSessions removes expired sessions
+func (db *DB) CleanupExpiredSessions() error {
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `DELETE FROM user_sessions WHERE expires_at <= ?`
+	case CockroachDB:
+		query = `DELETE FROM user_sessions WHERE expires_at <= $1`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
+
+	_, err := db.conn.Exec(query, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to cleanup expired sessions: %w", err)
+	}
+
+	return nil
+}
+
+// CreateEmailVerification creates an email verification token
+func (db *DB) CreateEmailVerification(userID int, token string, expiresAt time.Time) error {
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `INSERT INTO email_verifications (user_id, token, expires_at) VALUES (?, ?, ?)`
+	case CockroachDB:
+		query = `INSERT INTO email_verifications (user_id, token, expires_at) VALUES ($1, $2, $3)`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
+
+	_, err := db.conn.Exec(query, userID, token, expiresAt)
+	if err != nil {
+		return fmt.Errorf("failed to create email verification: %w", err)
+	}
+
+	return nil
+}
+
+// VerifyEmail marks an email as verified using the verification token
+func (db *DB) VerifyEmail(token string) error {
+	// First, find the verification record
+	var userID int
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `SELECT user_id FROM email_verifications WHERE token = ? AND expires_at > ? AND used = ?`
+	case CockroachDB:
+		query = `SELECT user_id FROM email_verifications WHERE token = $1 AND expires_at > $2 AND used = $3`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
+
+	err := db.conn.QueryRow(query, token, time.Now(), db.boolValue(false)).Scan(&userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("invalid or expired verification token")
+		}
+		return fmt.Errorf("failed to find verification token: %w", err)
+	}
+
+	// Start transaction
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Mark verification as used
+	switch db.dbType {
+	case SQLite:
+		query = `UPDATE email_verifications SET used = ? WHERE token = ?`
+	case CockroachDB:
+		query = `UPDATE email_verifications SET used = $1 WHERE token = $2`
+	}
+
+	_, err = tx.Exec(query, db.boolValue(true), token)
+	if err != nil {
+		return fmt.Errorf("failed to mark verification as used: %w", err)
+	}
+
+	// Mark user email as verified
+	switch db.dbType {
+	case SQLite:
+		query = `UPDATE users SET email_verified = ?, updated_at = ? WHERE id = ?`
+	case CockroachDB:
+		query = `UPDATE users SET email_verified = $1, updated_at = $2 WHERE id = $3`
+	}
+
+	_, err = tx.Exec(query, db.boolValue(true), time.Now(), userID)
+	if err != nil {
+		return fmt.Errorf("failed to mark email as verified: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// UpdateLastLogin updates the user's last login timestamp
+func (db *DB) UpdateLastLogin(userID int) error {
+	var query string
+	switch db.dbType {
+	case SQLite:
+		query = `UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?`
+	case CockroachDB:
+		query = `UPDATE users SET last_login_at = $1, updated_at = $2 WHERE id = $3`
+	default:
+		return fmt.Errorf("unsupported database type")
+	}
+
+	now := time.Now()
+	_, err := db.conn.Exec(query, now, now, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update last login: %w", err)
+	}
+
+	return nil
+}
+
+// ValidateMasterAPIKey validates the master API key (preserves emergency access)
+func (db *DB) ValidateMasterAPIKey(apiKey, masterKey string) bool {
+	return apiKey == masterKey
 }
