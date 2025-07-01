@@ -13,8 +13,12 @@
 - **Protocols**: HTTP/1.1, HTTP/2, HTTP/3 (QUIC) support
 - **Logging**: Zerolog with structured JSON and console output
 - **Build**: Single binary with embedded frontend assets
+- **Authentication**: Email/password with bcrypt, optional TOTP 2FA, session-based auth
 
 ### Core Features
+- **User Authentication**: Email/password registration, email verification, optional TOTP 2FA
+- **Session Management**: Secure token-based sessions with expiration
+- **Master Key Access**: Emergency API key access preserved for troubleshooting
 - **Monitoring Types**: HTTP/HTTPS and ping monitoring
 - **Agent Support**: Distributed monitoring across different networks
 - **Auto-TLS**: Automatic ed25519 certificate generation
@@ -29,12 +33,13 @@ sreootb/
 ├── main.go                 # Application entry point with embedded web assets
 ├── cmd/                    # CLI commands (server, agent, version)
 ├── internal/              # Go internal packages
-│   ├── models/            # Data models and validation
-│   ├── database/          # Database layer
+│   ├── models/            # Data models and validation (includes User auth models)
+│   ├── database/          # Database layer (includes user auth tables & methods)
 │   ├── server/            # HTTP server and API handlers
 │   ├── agent/             # Agent functionality
 │   ├── monitor/           # Monitoring engine
-│   └── config/            # Configuration management
+│   ├── config/            # Configuration management
+│   └── utils/             # Utilities (auth, email, hashing, TOTP)
 ├── frontend/              # Next.js SPA frontend
 │   ├── src/app/          # Next.js app router pages
 │   ├── src/components/   # React components
@@ -46,6 +51,50 @@ sreootb/
 └── web/                  # Alternative frontend build location
 ```
 
+## Authentication System (NEW)
+
+### Current Implementation Status
+- ✅ **Database Schema**: User accounts, sessions, email verification, 2FA backup codes
+- ✅ **Password Security**: bcrypt with cost 12 for strong hashing
+- ✅ **Session Management**: Secure token-based sessions with expiration
+- ✅ **Email Verification**: Token-based email verification workflow
+- ✅ **TOTP 2FA**: Complete 2FA setup with QR codes and backup codes
+- ✅ **Master Key Fallback**: Original API key preserved for emergency access
+- ✅ **Database Methods**: Complete CRUD operations for user management
+- ✅ **Utilities**: Password hashing, TOTP generation/validation, secure tokens
+- ✅ **Email Service**: Console-based email service (easily extensible to SMTP)
+- 🔄 **Server Handlers**: Authentication endpoints (IN PROGRESS)
+- 🔄 **Frontend Updates**: Registration/login UI (PENDING)
+- 🔄 **Configuration**: Email and session settings (PENDING)
+
+### Database Schema Changes
+**New Tables Added:**
+- `users` - User accounts with email, password hash, names, roles, 2FA settings
+- `user_sessions` - Active sessions with secure token hashing
+- `email_verifications` - Email verification tokens with expiration
+- `two_factor_backup_codes` - Hashed backup codes for 2FA recovery
+- `password_reset_tokens` - Password reset workflow tokens
+
+**Indexes Added:**
+- Optimized indexes for email lookups, session validation, and token verification
+- Performance-tuned for both SQLite and CockroachDB
+
+### Authentication Flow
+1. **Registration**: Email/password → Email verification → Account activation
+2. **Login**: Email/password → Optional TOTP → Session creation
+3. **Master Key**: Original API key still works as emergency access
+4. **2FA Setup**: TOTP secret generation → QR code → Backup codes
+5. **Session Management**: Secure tokens with automatic cleanup
+
+### Security Features
+- **bcrypt password hashing** with cost 12 (strong security)
+- **TOTP 2FA** with backup codes for account recovery
+- **Secure session tokens** with SHA-256 hashing
+- **Email verification** required for account activation
+- **Master API key fallback** for emergency access
+- **Session expiration** with automatic cleanup
+- **Strong password requirements** (8+ chars, complexity rules)
+
 ## Key Models and Data Structures
 
 ### Core Entities
@@ -54,6 +103,13 @@ sreootb/
 - **Agent**: Distributed monitoring agents with authentication
 - **MonitorTask**: Monitoring tasks assigned to agents
 - **MonitorResult**: Results submitted by agents
+
+### User Authentication Entities (NEW)
+- **User**: User accounts with email, password, 2FA settings
+- **UserSession**: Active sessions with secure token management
+- **EmailVerification**: Email verification workflow
+- **TwoFactorAuth**: 2FA backup codes for recovery
+- **UserRegistrationRequest/UserLoginRequest**: API request models
 
 ### Agent-Focused Architecture (Primary Development Area)
 The agent system is the primary focus of development work:
@@ -119,6 +175,7 @@ The agent system is the primary focus of development work:
 - **Database**: SQLite or CockroachDB with connection pooling
 - **Auto-TLS**: Automatic certificate generation and rotation
 - **Monitoring**: Configurable scan intervals (10s to 24h)
+- **Authentication**: Email service settings, session duration, 2FA options (NEW)
 
 ### Deployment Modes
 1. **Standalone Mode**: Single process running both server and local agent with full server options (NEW - perfect for any deployment)
@@ -192,11 +249,34 @@ sreootb standalone --config sreootb-standalone.yaml
 - **Agent-centric architecture** - most development work centers around agent functionality
 
 ## Security Features
-- API key-based authentication for agents
-- TLS certificate management (auto-generation or custom)
-- Secure password hashing for database users
-- Input validation and sanitization
-- SSL/TLS for database connections in HA mode
+- **User Authentication**: Email/password with strong bcrypt hashing
+- **Session Security**: Secure token-based sessions with expiration
+- **Two-Factor Authentication**: TOTP with QR codes and backup codes
+- **Email Verification**: Required for account activation
+- **Master Key Fallback**: Emergency API key access preserved
+- **API key-based authentication for agents**: Separate from user auth
+- **TLS certificate management**: Auto-generation or custom
+- **Input validation and sanitization**: Throughout the application
+- **SSL/TLS for database connections**: In HA mode
+
+## Dependencies Added for Authentication
+- `golang.org/x/crypto/bcrypt` - Password hashing
+- `github.com/pquerna/otp` - TOTP 2FA functionality
+- `github.com/pquerna/otp/totp` - TOTP validation
+
+## Next Development Priorities
+1. **Authentication Handlers**: Complete server-side auth endpoints
+2. **Frontend Auth UI**: Replace API key login with proper user registration/login
+3. **Email Configuration**: Add SMTP settings and production email service
+4. **Session Middleware**: Protect routes with session validation
+5. **2FA Frontend**: QR code display and setup flow
+6. **Password Reset**: Complete forgot password workflow
+
+## CockroachDB Deployment
+- **Secure Cluster**: ECDSA certificates with deployment scripts
+- **3-Node Setup**: Production-ready HA configuration
+- **Deployment Scripts**: `scripts/deploydb.sh` and Puppet manifest
+- **Connection Examples**: Secure config in `sreootb.example.yaml`
 
 ## Monitoring Capabilities
 - Configurable check intervals (10 seconds to 24 hours)
